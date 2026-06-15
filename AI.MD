@@ -1,28 +1,6 @@
-# AI.MD
-
 ## 项目定位
 
 UF4COM 是 UF4 通信协议 V3 的 C11 实现，目标是在 UART、USB CDC、RS485、TCP 透传等链路上复用同一套帧编码、CRC16、流式解析和命令调度逻辑。
-
-## 当前维护状态
-
-- 日期：2026-06-13
-- 维护者：Codex
-- 当前重点：把协议文档中的帧格式落成可编译、可自测、可移植的基础库。
-
-## 本次完善内容
-
-- 补齐公共协议 API：帧常量、命令码、错误码、发送回调、帧构建、输入解析入口。
-- 补齐 README 数据 ID 对应的 `UF4_ID_*` 宏，避免应用层继续手写裸 ID。
-- 增加 `UF4_SetWriteApplyCallback()`，应用层可在 `WRITE_REQ` 成功写入影子寄存器后同步业务变量。
-- 实现流式解析器：支持按字节输入、SOF 同步、DATA 收集、CRC16 校验，校验通过后产出完整帧。
-- 整理 ID 表：从头文件中的全局数组改成 `UF4_IDTableBind()` 注册，避免多重定义和未声明变量。
-- 完善命令调度：支持 READ、WRITE、STREAM_START、STREAM_STOP、STREAM_DATA，并对非法长度、非法 ID、写保护、非法命令返回错误帧。
-- 增加发送封装：`UF4_BuildFrame()` 负责生成完整帧，`UF4_SendFrame()` 通过应用层回调发出。
-- 增加 UART 接收占位：`UF4_UART_RxByte()` 将字节交给协议解析器，便于后续接 STM32 HAL UART/CDC 回调。
-- 将 `main.c` 改为最小自测程序，验证 READ 请求编码、解析和响应。
-- 调整 CMake：启用 C11 必需项，并为当前 GNU/MinGW 工具链使用 `-g0`，避开当前汇编器不支持 DWARF 调试信息选项的问题。
-- 修订 `README.md`：补充 VALUE 字节序、LEN 约束、错误帧 DATA 格式、CRC 错误处理说明和当前 C 代码接入方式。
 
 ## 关键文件
 
@@ -51,8 +29,3 @@ UF4COM 是 UF4 通信协议 V3 的 C11 实现，目标是在 UART、USB CDC、RS
 - 给 WRITE、错误帧、STREAM_START/STOP 再补几组自测，覆盖异常路径。
 - 如果需要在多个设备产品间复用 ID 定义，建议把具体 ID 表放到应用层，由产品工程注册。
 - 可以增加 `UF4_SetOnFrameHook()` 或事件回调，方便调试器记录原始请求和响应。
-
-## 验证记录
-
-- 2026-06-13：执行 CMake 构建并运行 `UF4COM.exe`，自测输出 `UF4COM self-test passed.`。
-- 2026-06-13：UF4DigitalPower 已通过 CMake 直接引用本项目协议核心，旧 TVLCOM TLV/Modbus CRC 固件协议已移除，完整数据 ID 在固件 `Core/Src/tvlcom.c` 中绑定。
