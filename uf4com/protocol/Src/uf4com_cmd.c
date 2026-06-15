@@ -18,7 +18,7 @@
 #include "uf4com_id_table.h"
 
 #define UF4_TV_SIZE 3u
-#define UF4_MAX_STREAM_IDS 32u
+#define UF4_MAX_STREAM_IDS 64u
 
 uint8_t g_stream_enable;
 uint8_t g_stream_ids[UF4_MAX_STREAM_IDS];
@@ -152,28 +152,36 @@ static void UF4_HandleWrite(
 static void UF4_HandleStreamStart(
     uf4_frame_t *frame)
 {
-    if((frame->len % UF4_TV_SIZE) != 0u || (frame->len / UF4_TV_SIZE) > UF4_MAX_STREAM_IDS)
+    uint8_t req_count = frame->len / UF4_TV_SIZE;
+
+    if((frame->len % UF4_TV_SIZE) != 0u || req_count > UF4_MAX_STREAM_IDS)
     {
         UF4_SendError(frame, UF4_CMD_STREAM_START_RSP, UF4_ERR_INVALID_LEN);
         return;
     }
 
     g_stream_enable = 1;
-
     g_stream_count = 0;
 
-    for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
+    if(frame->len == 0u)
     {
-        if(UF4_FindID(frame->data[i]) == NULL)
+        /* 空 payload = 请求全量流，把 ID 表里所有 ID 都加进来 */
+        g_stream_count = (uint8_t)UF4_GetAllIDs(g_stream_ids, UF4_MAX_STREAM_IDS);
+    }
+    else
+    {
+        for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
         {
-            g_stream_enable = 0u;
-            g_stream_count = 0u;
-            UF4_SendError(frame, UF4_CMD_STREAM_START_RSP, UF4_ERR_INVALID_ID);
-            return;
-        }
+            if(UF4_FindID(frame->data[i]) == NULL)
+            {
+                g_stream_enable = 0u;
+                g_stream_count = 0u;
+                UF4_SendError(frame, UF4_CMD_STREAM_START_RSP, UF4_ERR_INVALID_ID);
+                return;
+            }
 
-        g_stream_ids[g_stream_count++] =
-            frame->data[i];
+            g_stream_ids[g_stream_count++] = frame->data[i];
+        }
     }
 
     UF4_SendFrame(

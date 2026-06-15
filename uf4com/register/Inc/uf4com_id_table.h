@@ -30,5 +30,6 @@ typedef struct
 void UF4_IDTableBind(uf4_id_t *table, size_t count);
 uf4_id_t *UF4_FindID(uint8_t id);
 size_t UF4_IDTableCount(void);
+size_t UF4_GetAllIDs(uint8_t *out_ids, size_t max_count);
 
 #endif // UF4COM_ID_TABLE_H

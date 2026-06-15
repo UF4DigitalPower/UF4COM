@@ -42,3 +42,21 @@ size_t UF4_IDTableCount(void)
 {
   return s_table_count;
 }
+
+size_t UF4_GetAllIDs(uint8_t *out_ids, size_t max_count)
+{
+  size_t i;
+  size_t copy_count = (s_table_count < max_count) ? s_table_count : max_count;
+
+  if(out_ids == NULL)
+  {
+    return 0u;
+  }
+
+  for(i = 0u; i < copy_count; i++)
+  {
+    out_ids[i] = s_table[i].id;
+  }
+
+  return copy_count;
+}
