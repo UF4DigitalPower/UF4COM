@@ -424,40 +424,40 @@ DATA总字节数(Byte)
 
 # 14. 数据ID定义
 
-| ID(hex) | 名称                             | RW | 单位   | 说明       |
-|---------|--------------------------------|----|------|----------|
-| 0x0A    | INPUT_VOLTAGE                  | R  | mV   | 输入电压     |
-| 0x0B    | INPUT_CURRENT                  | R  | mA   | 输入电流     |
-| 0x0C    | OUTPUT_VOLTAGE                 | R  | mV   | 输出电压     |
-| 0x0D    | OUTPUT_CURRENT                 | R  | mA   | 输出电流     |
+| ID(hex) | 名称                             | RW | 单位    | 说明       |
+|---------|--------------------------------|----|-------|----------|
+| 0x0A    | INPUT_VOLTAGE                  | R  | mV    | 输入电压     |
+| 0x0B    | INPUT_CURRENT                  | R  | mA    | 输入电流     |
+| 0x0C    | OUTPUT_VOLTAGE                 | R  | mV    | 输出电压     |
+| 0x0D    | OUTPUT_CURRENT                 | R  | mA    | 输出电流     |
 | 0x0E    | CORE_TEMPERATURE               | R  | 0.01℃ | 核心温度     |
 | 0x0F    | TEMP1_TEMPERATURE              | R  | 0.01℃ | 第一温度     |
 | 0x10    | TEMP2_TEMPERATURE              | R  | 0.01℃ | 第二温度     |
-| 0x11    | SET_VOLTAGE_LIMIT              | RW | mV   | 电压设定值    |
-| 0x12    | SET_CURRENT_LIMIT              | RW | mA   | 电流设定值    |
-| 0x14    | CC_CV_MODE                     | R  | -    | CC/CV模式  |
-| 0x15    | POWER_STATE                    | RW | -    | 电源状态     |
-| 0x16    | FAULT_STATE                    | R  | -    | 故障状态     |
-| 0x17    | STATE_MACHINE_FLAG_BITS        | R  | -    | 状态机标志    |
-| 0x18    | STATE_MACHINE_STATE            | R  | -    | 状态机状态    |
-| 0x19    | INPUT_VOLTAGE_RAW              | R  | ADC  | 原始输入电压   |
-| 0x1A    | INPUT_CURRENT_RAW              | R  | ADC  | 原始输入电流   |
-| 0x1B    | OUTPUT_VOLTAGE_RAW             | R  | ADC  | 原始输出电压   |
-| 0x1C    | OUTPUT_CURRENT_RAW             | R  | ADC  | 原始输出电流   |
+| 0x11    | SET_VOLTAGE_LIMIT              | RW | mV    | 电压设定值    |
+| 0x12    | SET_CURRENT_LIMIT              | RW | mA    | 电流设定值    |
+| 0x14    | CC_CV_MODE                     | R  | -     | CC/CV模式  |
+| 0x15    | POWER_STATE                    | RW | -     | 电源状态     |
+| 0x16    | FAULT_STATE                    | R  | -     | 故障状态     |
+| 0x17    | STATE_MACHINE_FLAG_BITS        | R  | -     | 状态机标志    |
+| 0x18    | STATE_MACHINE_STATE            | R  | -     | 状态机状态    |
+| 0x19    | INPUT_VOLTAGE_RAW              | R  | ADC   | 原始输入电压   |
+| 0x1A    | INPUT_CURRENT_RAW              | R  | ADC   | 原始输入电流   |
+| 0x1B    | OUTPUT_VOLTAGE_RAW             | R  | ADC   | 原始输出电压   |
+| 0x1C    | OUTPUT_CURRENT_RAW             | R  | ADC   | 原始输出电流   |
 | 0x1D    | OTP_VALUE                      | R  | 0.01℃ | 当前OTP值   |
 | 0x1E    | OTP_SET_VALUE                  | RW | 0.01℃ | OTP设定值   |
-| 0x1F    | OVP_VALUE                      | R  | mV   | 当前OVP值   |
-| 0x20    | OVP_SET_VALUE                  | RW | mV   | OVP设定值   |
-| 0x21    | OCP_VALUE                      | R  | mA   | 当前OCP值   |
-| 0x22    | OCP_SET_VALUE                  | RW | mA   | OCP设定值   |
-| 0x23    | DUTY_CMD                       | RW | ‰    | 占空比命令    |
-| 0x24    | PWM_A_COMPARE                  | R  | Tick | PWM_A比较值 |
-| 0x25    | PWM_D_COMPARE                  | R  | Tick | PWM_D比较值 |
-| 0x26    | FAN_SPEED                      | R  | RPM  | 风扇转速     |
-| 0x27    | FAN_SET_VALUE                  | RW | %    | 风扇设定值    |
-| 0x29    | LOOP_CURRENT_FEEDBACK          | R  | ADC  | 电流反馈     |
-| 0x2A    | LOOP_CURRENT_REFERENCE         | R  | ADC  | 电流参考     |
-| 0x2B    | VOLTAGE_LOOP_CURRENT_REFERENCE | R  | ADC  | 电压环参考    |
+| 0x1F    | OVP_VALUE                      | R  | mV    | 当前OVP值   |
+| 0x20    | OVP_SET_VALUE                  | RW | mV    | OVP设定值   |
+| 0x21    | OCP_VALUE                      | R  | mA    | 当前OCP值   |
+| 0x22    | OCP_SET_VALUE                  | RW | mA    | OCP设定值   |
+| 0x23    | DUTY_CMD                       | RW | ‰     | 占空比命令    |
+| 0x24    | PWM_A_COMPARE                  | R  | Tick  | PWM_A比较值 |
+| 0x25    | PWM_D_COMPARE                  | R  | Tick  | PWM_D比较值 |
+| 0x26    | FAN_SPEED                      | R  | RPM   | 风扇转速     |
+| 0x27    | FAN_SET_VALUE                  | RW | %     | 风扇设定值    |
+| 0x29    | LOOP_CURRENT_FEEDBACK          | R  | ADC   | 电流反馈     |
+| 0x2A    | LOOP_CURRENT_REFERENCE         | R  | ADC   | 电流参考     |
+| 0x2B    | VOLTAGE_LOOP_CURRENT_REFERENCE | R  | ADC   | 电压环参考    |
 
 ---
 
