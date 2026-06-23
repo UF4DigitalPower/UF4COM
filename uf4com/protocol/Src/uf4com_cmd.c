@@ -17,6 +17,8 @@
 #include "uf4com_cmd.h"
 #include "uf4com_id_table.h"
 
+#include <string.h>
+
 #define UF4_TV_SIZE 3u
 #define UF4_MAX_STREAM_IDS 64u
 
@@ -24,12 +26,18 @@ uint8_t g_stream_enable;
 uint8_t g_stream_ids[UF4_MAX_STREAM_IDS];
 uint8_t g_stream_count;
 
+static uint8_t s_last_write_ids[256u];
+
 static void UF4_HandleRead(uf4_frame_t *frame);
 static void UF4_HandleWrite(uf4_frame_t *frame);
 static void UF4_HandleStreamStart(uf4_frame_t *frame);
 static void UF4_HandleStreamStop(uf4_frame_t *frame);
 static void UF4_SendError(const uf4_frame_t *frame, uint8_t rsp_cmd, uf4_error_t error);
 
+uint8_t UF4_LastWriteContainsID(uint8_t id)
+{
+  return s_last_write_ids[id];
+}
 
 void UF4_Dispatch(uf4_frame_t *frame)
 {
@@ -110,6 +118,8 @@ static void UF4_HandleWrite(
     return;
   }
 
+  memset(s_last_write_ids, 0, sizeof(s_last_write_ids));
+
   for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
   {
     uint8_t id =
@@ -135,6 +145,7 @@ static void UF4_HandleWrite(
     }
 
     *(item->ptr) = value;
+    s_last_write_ids[id] = 1u;
   }
 
   UF4_NotifyWriteApplied();

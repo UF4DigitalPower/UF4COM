@@ -141,6 +141,7 @@ typedef void (*uf4_write_apply_fn_t)(void *user);
 
 void UF4_Init(uf4_tx_fn_t tx, void *user);
 void UF4_SetWriteApplyCallback(uf4_write_apply_fn_t cb, void *user);
+uint8_t UF4_LastWriteContainsID(uint8_t id);
 void UF4_Process(void);
 uint16_t UF4_BuildFrame(uint8_t seq,
                         uint8_t flags,
