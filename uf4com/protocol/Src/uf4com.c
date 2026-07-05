@@ -35,6 +35,8 @@ static void UF4_LoadDefaultConfig(uf4_config_t *config)
 
 static uint8_t UF4_ResponseCmdFor(uint8_t cmd)
 {
+    // Request table stores the response command we expect to see on the wire.
+    // That keeps ACK matching cheap: SRC + SEQ + CMD is enough for V4.
     switch(cmd)
     {
         case UF4_CMD_READ_REQ:
@@ -56,6 +58,8 @@ static uint8_t UF4_ResponseCmdFor(uint8_t cmd)
 
 static uint8_t UF4_IsRequestCmd(uint8_t cmd)
 {
+    // Only these commands are handled inside uf4com_cmd.c. Response frames and
+    // STREAM_DATA belong to the application callback after optional ACK matching.
     switch(cmd)
     {
         case UF4_CMD_READ_REQ:
@@ -91,6 +95,8 @@ static uint8_t UF4_AddRequest(uint8_t dst,
                               const uint8_t *frame,
                               uint16_t frame_len)
 {
+    // Broadcast is fire-and-forget. If every slave ACKed the same broadcast,
+    // half-duplex buses would collide immediately.
     if(dst == UF4_BROADCAST_ID || frame == NULL || frame_len > UF4_MAX_FRAME_LEN)
     {
         return 1u;
@@ -100,6 +106,8 @@ static uint8_t UF4_AddRequest(uint8_t dst,
     {
         if(s_requests[i].active == 0u)
         {
+            // Store the encoded frame, not just user payload. Retransmit must be
+            // byte-identical to the first send, including SEQ and CRC.
             s_requests[i].seq = seq;
             s_requests[i].dst = dst;
             s_requests[i].cmd = expected_cmd;
@@ -131,6 +139,8 @@ static uint8_t UF4_MatchAck(const uf4_frame_t *frame)
 
     for(uint8_t i = 0u; i < UF4_MAX_PENDING_REQUESTS; i++)
     {
+        // DST in the request becomes SRC in the response. SEQ must echo. CMD is
+        // the expected response command, e.g. READ_REQ waits for READ_RSP.
         if(s_requests[i].active != 0u &&
            s_requests[i].dst == frame->src &&
            s_requests[i].seq == frame->seq &&
@@ -168,6 +178,8 @@ void UF4_InitEx(const uf4_config_t *config, uf4_tx_fn_t tx, void *user)
         s_config.arbitration_slot_ms = UF4_DEFAULT_ARBITRATION_SLOT_MS;
     }
 
+    // Re-init is allowed. It intentionally clears pending requests because the
+    // local address, role or timeout policy may have changed.
     s_tx = tx;
     s_tx_user = user;
     s_now_ms = 0u;
@@ -204,6 +216,8 @@ void UF4_NotifyWriteApplied(void)
 
 void UF4_Process(void)
 {
+    // Compatibility path for old code. Real firmware should call UF4_ProcessMs()
+    // with a system tick; this fallback assumes the caller runs it every 1 ms.
     s_now_ms++;
     UF4_ProcessMs(s_now_ms);
 }
@@ -236,6 +250,8 @@ void UF4_ProcessMs(uint32_t now_ms)
 
         if(s_tx != NULL)
         {
+            // retries_left counts retransmissions, not the initial send. So a
+            // value of 3 means: first send + up to 3 resends.
             s_tx(s_requests[i].frame, s_requests[i].frame_len, s_tx_user);
         }
 
@@ -263,6 +279,8 @@ uint32_t UF4_GetArbitrationDelayMs(uint8_t device_id)
         return 0u;
     }
 
+    // Lower ID gets an earlier slot. This is only the protocol-side slot helper;
+    // the RS485 driver still needs bus-idle detection before enabling TX.
     return (uint32_t)device_id * (uint32_t)s_config.arbitration_slot_ms;
 }
 
@@ -300,6 +318,8 @@ uint16_t UF4_BuildFrameTo(uint8_t src,
 
     if(dst == UF4_BROADCAST_ID)
     {
+        // Keep the explicit flag as a cheap hint for sniffers/loggers. Dispatch
+        // still trusts DST == 0xFF as the real broadcast decision.
         flags |= UF4_FLAG_BROADCAST;
     }
 
@@ -370,6 +390,8 @@ uint8_t UF4_SendFrameTo(uint8_t dst,
 
     if((flags & UF4_FLAG_ACK_REQ) != 0u && (flags & UF4_FLAG_ACK_FRAME) == 0u)
     {
+        // Tracking happens after the first send. If the request table is full,
+        // the caller gets 0 and the ACK event reports UF4_ACK_DROPPED.
         return UF4_AddRequest(dst, seq, UF4_ResponseCmdFor(cmd), buffer, frame_len);
     }
 
@@ -396,11 +418,15 @@ uint8_t UF4_InputByte(uint8_t byte)
 
     if(UF4_IsFrameForLocalDevice(&frame) == 0u)
     {
+        // Important on shared buses: a valid CRC frame may still be for another
+        // slave. Drop it silently so we do not create bus chatter.
         return 0u;
     }
 
     if((frame.flags & UF4_FLAG_ACK_FRAME) != 0u)
     {
+        // ACK matching is protocol housekeeping. The frame is still delivered so
+        // READ_RSP/WRITE_RSP payload stays visible to the application.
         (void)UF4_MatchAck(&frame);
 
         if(s_frame_rx != NULL)

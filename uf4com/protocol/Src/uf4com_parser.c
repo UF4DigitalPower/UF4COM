@@ -13,6 +13,8 @@ static uint16_t UF4_FrameCRC(const uf4_frame_t *frame)
 {
     uint8_t crc_data[6u + UF4_MAX_DATA_LEN];
 
+    // V4 deliberately includes SRC/DST in CRC. A flipped address bit must not
+    // turn into a valid command for the wrong slave.
     crc_data[0] = frame->src;
     crc_data[1] = frame->dst;
     crc_data[2] = frame->seq;
@@ -56,10 +58,13 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
     switch(parser->state)
     {
         case WAIT_SOF1:
+            // Any byte stream noise is ignored until AA 55 appears again.
             parser->state = (byte == UF4_SOF1) ? WAIT_SOF2 : WAIT_SOF1;
             break;
 
         case WAIT_SOF2:
+            // If the second byte is wrong, restart from SOF1. This keeps the
+            // parser simple and bounded; no history buffer needed.
             parser->state = (byte == UF4_SOF2) ? WAIT_SRC : WAIT_SOF1;
             break;
 
@@ -97,6 +102,8 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
         case WAIT_DATA:
             if(parser->data_index >= UF4_MAX_DATA_LEN)
             {
+                // LEN is one byte, so this is mostly defensive against future
+                // format changes or a corrupted parser state.
                 UF4_ParserInit(parser);
                 return 0u;
             }
@@ -125,6 +132,8 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
                 *out_frame = parser->frame;
             }
 
+            // Always reset after CRC, valid or not. A bad frame must not leak
+            // partial state into the next frame.
             UF4_ParserInit(parser);
             return valid;
         }

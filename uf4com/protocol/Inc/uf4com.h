@@ -83,6 +83,12 @@
 #define UF4_ID_LOOP_CURRENT_REFERENCE           0x2Au
 #define UF4_ID_VOLTAGE_LOOP_CURRENT_REFERENCE   0x2Bu
 
+/**
+ * @brief Protocol error codes carried by ERROR ACK frames.
+ *
+ * Wire format uses DATA = FF ERR_H ERR_L. Keep values stable because the PC
+ * side and old tooling will usually compare the numeric code, not the enum name.
+ */
 typedef enum
 {
     UF4_OK = 0x0000,
@@ -100,12 +106,21 @@ typedef enum
     UF4_ERR_ARBITRATION = 0x000C
 } uf4_error_t;
 
+/**
+ * @brief Local station role.
+ *
+ * V4 does not hide half-duplex bus policy inside the protocol layer. The role is
+ * kept in config so application code can make master/slave decisions around it.
+ */
 typedef enum
 {
     UF4_ROLE_MASTER = 0u,
     UF4_ROLE_SLAVE = 1u
 } uf4_role_t;
 
+/**
+ * @brief Result of a tracked ACK_REQ transaction.
+ */
 typedef enum
 {
     UF4_ACK_PENDING = 0u,
@@ -114,6 +129,12 @@ typedef enum
     UF4_ACK_DROPPED = 3u
 } uf4_ack_status_t;
 
+/**
+ * @brief Decoded UF4COM V4 frame.
+ *
+ * Wire order after SOF is SRC, DST, SEQ, FLAGS, CMD, LEN, DATA, CRC16. CRC
+ * covers SRC through DATA so an address-bit error is caught before dispatch.
+ */
 typedef struct
 {
     uint8_t src;
@@ -131,6 +152,9 @@ typedef struct
     uint16_t value;
 } tv_t;
 
+/**
+ * @brief Parser states for byte-by-byte stream input.
+ */
 typedef enum
 {
     WAIT_SOF1,
@@ -146,6 +170,12 @@ typedef enum
     WAIT_CRC_H
 } uf4_state_t;
 
+/**
+ * @brief Stream parser context.
+ *
+ * Keep one parser per physical byte stream. The default API owns a single static
+ * parser because this library is normally used with one UART/USB CDC endpoint.
+ */
 typedef struct
 {
     uf4_state_t state;
@@ -154,6 +184,12 @@ typedef struct
     uint16_t crc_rx;
 } uf4_parser_t;
 
+/**
+ * @brief One pending ACK_REQ transaction.
+ *
+ * The whole encoded frame is kept so timeout handling can retransmit without
+ * asking the application to rebuild payload data that may already have changed.
+ */
 typedef struct
 {
     uint8_t seq;
@@ -167,6 +203,9 @@ typedef struct
     uint8_t active;
 } uf4_request_entry_t;
 
+/**
+ * @brief Runtime protocol configuration.
+ */
 typedef struct
 {
     uint8_t local_id;
@@ -185,19 +224,48 @@ typedef void (*uf4_ack_event_fn_t)(uint8_t dst,
                                    void *user);
 typedef void (*uf4_frame_rx_fn_t)(const uf4_frame_t *frame, void *user);
 
+/**
+ * @brief Initialize with default master ID 0x00.
+ */
 void UF4_Init(uf4_tx_fn_t tx, void *user);
+
+/**
+ * @brief Initialize V4 protocol state with explicit local ID and timing config.
+ */
 void UF4_InitEx(const uf4_config_t *config, uf4_tx_fn_t tx, void *user);
 void UF4_SetWriteApplyCallback(uf4_write_apply_fn_t cb, void *user);
+
+/**
+ * @brief Register callback for ACK_REQ completion, timeout or request-table drop.
+ */
 void UF4_SetAckEventCallback(uf4_ack_event_fn_t cb, void *user);
+
+/**
+ * @brief Register callback for complete incoming response/data frames.
+ *
+ * Request frames are dispatched internally. ACK frames are first matched against
+ * the request table, then delivered here so the application can consume payload.
+ */
 void UF4_SetFrameRxCallback(uf4_frame_rx_fn_t cb, void *user);
 void UF4_Process(void);
+
+/**
+ * @brief Run timeout/retransmit processing with a monotonic millisecond tick.
+ */
 void UF4_ProcessMs(uint32_t now_ms);
 
 uint8_t UF4_GetLocalID(void);
 void UF4_SetLocalID(uint8_t local_id);
+
+/**
+ * @brief Calculate software arbitration delay. Lower device ID wins earlier slot.
+ */
 uint32_t UF4_GetArbitrationDelayMs(uint8_t device_id);
 uint8_t UF4_IsFrameForLocalDevice(const uf4_frame_t *frame);
 
+/**
+ * @brief Build a V4 frame with explicit source and destination device IDs.
+ */
 uint16_t UF4_BuildFrameTo(uint8_t src,
                           uint8_t dst,
                           uint8_t seq,
@@ -207,6 +275,10 @@ uint16_t UF4_BuildFrameTo(uint8_t src,
                           uint8_t len,
                           uint8_t *out,
                           uint16_t out_size);
+
+/**
+ * @brief Compatibility builder. Uses local ID as SRC and default master ID as DST.
+ */
 uint16_t UF4_BuildFrame(uint8_t seq,
                         uint8_t flags,
                         uint8_t cmd,
@@ -214,18 +286,34 @@ uint16_t UF4_BuildFrame(uint8_t seq,
                         uint8_t len,
                         uint8_t *out,
                         uint16_t out_size);
+
+/**
+ * @brief Send a frame to a specific device and track it if ACK_REQ is set.
+ */
 uint8_t UF4_SendFrameTo(uint8_t dst,
                         uint8_t seq,
                         uint8_t flags,
                         uint8_t cmd,
                         const uint8_t *data,
                         uint8_t len);
+
+/**
+ * @brief Compatibility sender. Sends to the default master ID.
+ */
 uint8_t UF4_SendFrame(uint8_t seq,
                       uint8_t flags,
                       uint8_t cmd,
                       const uint8_t *data,
                       uint8_t len);
+
+/**
+ * @brief Feed one received byte into the global parser.
+ */
 uint8_t UF4_InputByte(uint8_t byte);
+
+/**
+ * @brief Feed a buffer into the global parser. Returns accepted complete frames.
+ */
 uint8_t UF4_InputBuffer(const uint8_t *data, uint16_t len);
 
 #endif // UF4COM_H

@@ -64,11 +64,15 @@ static uint8_t UF4_ShouldReply(const uf4_frame_t *frame)
 
     if((frame->flags & UF4_FLAG_ACK_REQ) == 0u)
     {
+        // ACK_REQ is the contract: without it, WRITE can be fire-and-forget and
+        // READ is effectively a silent request. PC side should set ACK_REQ.
         return 0u;
     }
 
     if(frame->dst == UF4_BROADCAST_ID || frame->src == UF4_BROADCAST_ID)
     {
+        // Never ACK broadcast. One command may hit many slaves, and simultaneous
+        // ACKs are exactly what kills a half-duplex bus.
         return 0u;
     }
 
@@ -88,6 +92,8 @@ static void UF4_HandleRead(uf4_frame_t *frame)
 
     for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
     {
+        // READ request uses TV format too. VALUE bytes are ignored but kept so
+        // READ/WRITE/STREAM all share the same item packing.
         const uint8_t id = frame->data[i];
         uf4_id_t *item = UF4_FindID(id);
 
@@ -136,6 +142,8 @@ static void UF4_HandleWrite(uf4_frame_t *frame)
 
         if(item->rw == 0u)
         {
+            // Fail the whole WRITE on first protected item. Partial writes before
+            // this point remain applied; keep payload small if atomicity matters.
             UF4_SendError(frame, UF4_CMD_WRITE_RSP, UF4_ERR_WRITE_PROTECT);
             return;
         }
@@ -172,6 +180,8 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
 
     if(frame->len == 0u)
     {
+        // Empty STREAM_START means "stream every registered ID". This is handy
+        // for bring-up, but production masters usually request a shorter list.
         g_stream_count = (uint8_t)UF4_GetAllIDs(g_stream_ids, UF4_MAX_STREAM_IDS);
     }
     else
@@ -180,6 +190,7 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
         {
             if(UF4_FindID(frame->data[i]) == NULL)
             {
+                // Do not leave a half-configured stream running after bad input.
                 g_stream_enable = 0u;
                 g_stream_count = 0u;
                 UF4_SendError(frame, UF4_CMD_STREAM_START_RSP, UF4_ERR_INVALID_ID);
@@ -234,6 +245,8 @@ void UF4_StreamTask(void)
 
         if(item == NULL || (uint16_t)(len + UF4_TV_SIZE) > UF4_MAX_DATA_LEN)
         {
+            // The ID table may change at runtime on some targets. Skip stale IDs
+            // rather than killing the stream task.
             continue;
         }
 
@@ -257,6 +270,8 @@ static void UF4_SendError(const uf4_frame_t *frame, uint8_t rsp_cmd, uf4_error_t
 
     if(UF4_ShouldReply(frame) == 0u)
     {
+        // If the requester did not ask for ACK, there is nowhere reliable to put
+        // the error. Silently dropping mirrors CRC-error behavior.
         return;
     }
 
