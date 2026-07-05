@@ -1,518 +1,270 @@
-## 项目定位
+# UF4COM V4
 
-UF4COM 是 UF4 通信协议 V3 的 C11 实现，目标是在 UART、USB CDC、RS485、TCP 透传等链路上复用同一套帧编码、CRC16、流式解析和命令调度逻辑。
+UF4COM 是 UF4 通信协议的 C11 实现，目标是在 UART、USB CDC、RS485、TCP 透传等字节流链路上复用同一套帧编码、CRC16、流式解析、命令调度和主从站请求响应逻辑。
+
+V4 在 V3 基础上增加了设备 ID、主从站寻址、ACK 请求表、超时重发、SEQ/CMD 匹配和简单仲裁 slot 计算。协议层仍不直接依赖 HAL，底层发送由应用注入。
 
 ## 关键文件
 
-- `README.md`：协议 V3 文档，描述帧格式、CRC、命令、数据 ID 和错误码。
-- `uf4com/protocol/Inc/uf4com.h`：公共协议 API。
-- `uf4com/protocol/Src/uf4com.c`：帧构建、发送回调、全局输入入口。
-- `uf4com/protocol/Src/uf4com_parser.c`：流式解析器。
-- `uf4com/protocol/Src/uf4com_cmd.c`：命令调度和错误响应。
+- `uf4com/protocol/Inc/uf4com.h`：公共协议 API、帧格式、错误码和 V4 配置。
+- `uf4com/protocol/Src/uf4com.c`：帧构建、发送回调、ACK 请求表、超时重发、全局输入入口。
+- `uf4com/protocol/Src/uf4com_parser.c`：V4 流式解析器。
+- `uf4com/protocol/Src/uf4com_cmd.c`：READ/WRITE/STREAM 命令调度和错误响应。
 - `uf4com/register/Inc/uf4com_id_table.h`：ID 表注册和查找接口。
 - `main.c`：PC 侧最小自测入口。
 
 ## 设计约定
 
-- CRC16 参数保持 README 定义：Poly `0x1021`，Init `0xFFFF`，XorOut `0x0000`。
-- CRC 覆盖范围为 `SEQ FLAGS CMD LEN DATA`，不包含 `SOF` 和 `CRC16`。
+- CRC16 参数：Poly `0x1021`，Init `0xFFFF`，XorOut `0x0000`。
+- CRC 覆盖范围为 `SRC DST SEQ FLAGS CMD LEN DATA`，不包含 `SOF` 和 `CRC16`。
 - 帧内 CRC 字节序为小端：`CRC_L CRC_H`。
+- `SRC` 是发送方设备 ID，`DST` 是接收方设备 ID。
+- `0x00` 默认是主站 ID，`0xFF` 是广播 ID。
+- 广播请求不会产生 ACK/响应，避免一对多同时回包撞线。
 - TV 数据项固定为 3 字节：`ID VALUE_H VALUE_L`。
-- 温度类 ID 使用 `0.01℃` 单位，即摄氏度乘以 100，保留两位小数并适配 `uint16_t` VALUE。
-- 错误帧 DATA 固定为 `FF ERR_H ERR_L`。
 - `rw == 0` 表示只读，`rw != 0` 表示可写。
-- 协议层不直接依赖 HAL，底层发送由 `UF4_Init(tx, user)` 注入。
+- `ACK_REQ` 只对非广播请求生效；接收端仅在请求带 `ACK_REQ` 时返回 `ACK_FRAME`。
 
+## 1. 帧格式
 
-# 通信协议 V3
+| 字段 | 长度(Byte) | 示例 | 说明 |
+|---|---:|---|---|
+| SOF | 2 | AA 55 | 固定帧头 |
+| SRC | 1 | 00 | 发送方设备 ID |
+| DST | 1 | 11 | 接收方设备 ID |
+| SEQ | 1 | 01 | 帧序号 |
+| FLAGS | 1 | 01 | 控制标志 |
+| CMD | 1 | 01 | 命令码 |
+| LEN | 1 | 09 | DATA 总字节数 |
+| DATA | N | 0A 00 00 | 数据区 |
+| CRC16 | 2 | XX XX | CRC 校验 |
 
-适用于：
+最大 DATA 长度为 255 字节，最大整帧长度为 265 字节。
 
-- UART
-- USB CDC
-- RS485
-- TCP透传
-- 数字电源控制器
-- STM32上位机调试
+## 2. 主从站设备 ID
 
----
-
-# 1. 帧格式
-
-| 字段    | 长度(Byte) | 示例       | 说明       |
-|-------|---------:|----------|----------|
-| SOF   |        2 | AA 55    | 固定帧头     |
-| SEQ   |        1 | 01       | 帧序号      |
-| FLAGS |        1 | 01       | 控制标志     |
-| CMD   |        1 | 01       | 命令码      |
-| LEN   |        1 | 09       | DATA总字节数 |
-| DATA  |        N | 0A 33 20 | 数据区      |
-| CRC16 |        2 | XX XX    | CRC校验    |
-
----
-
-# 2. CRC16
-
-## 参数
-
-| 参数     | 值      |
-|--------|--------|
-| Poly   | 0x1021 |
-| Init   | 0xFFFF |
-| XorOut | 0x0000 |
-
-## 计算范围
-
-| 包含    |
-|-------|
-| SEQ   |
-| FLAGS |
-| CMD   |
-| LEN   |
-| DATA  |
-
-## 不包含
-
-| 不包含   |
-|-------|
-| SOF   |
-| CRC16 |
-
-## 字节序
-
-| 字段    | 顺序          |
-|-------|-------------|
-| CRC16 | CRC_L CRC_H |
-
-即：
+推荐拓扑：
 
 ```text
-Little Endian
+Master ID 0x00  <---- RS485/UART/USB CDC/TCP ---->  Slave ID 0x01
+                                                    Slave ID 0x02
+                                                    Slave ID 0x03
 ```
 
----
+规则：
 
-# 3. FLAGS定义
+- 主站主动发起 READ/WRITE/STREAM_START/STREAM_STOP。
+- 从站只处理 `DST == 本机 ID` 或 `DST == 0xFF` 的帧。
+- 从站响应时 `SRC = 本机 ID`，`DST = 请求帧 SRC`。
+- 主站请求多个从站时应逐个轮询，或使用广播请求让所有从站进入同一状态。
+- 广播请求不返回 ACK，避免多个从站同时响应。
 
-| Bit | Mask | 名称        | 说明     |
-|-----|------|-----------|--------|
-| 0   | 0x01 | ACK_REQ   | 请求ACK  |
-| 1   | 0x02 | ACK_FRAME | ACK回复帧 |
-| 2   | 0x04 | ERROR     | 错误响应   |
-| 3~7 | -    | Reserved  | 保留     |
+## 3. 仲裁 slot
 
-## FLAGS示例
+V4 提供 `UF4_GetArbitrationDelayMs(device_id)`，按设备 ID 计算发送 slot：
 
-| FLAGS | 含义         |
-|-------|------------|
-| 0x00  | 普通数据帧      |
-| 0x01  | 请求ACK      |
-| 0x02  | ACK回复      |
-| 0x06  | ACK回复 + 错误 |
+```text
+delay_ms = device_id * arbitration_slot_ms
+```
 
----
+设备 ID 越小，delay 越小，优先级越高。默认 `arbitration_slot_ms = 2`。
 
-# 4. CMD定义
+注意：这是软件层的 slot 计算，不等于完整物理总线仲裁。RS485 一对多场景仍建议主站轮询；如果多个从站必须主动上传，应用层应按该 delay 延迟发送，并结合驱动层的总线空闲检测。
 
-| CMD(hex) | 名称               | 方向       |
-|----------|------------------|----------|
-| 0x01     | READ_REQ         | PC → MCU |
-| 0x81     | READ_RSP         | MCU → PC |
-| 0x02     | WRITE_REQ        | PC → MCU |
-| 0x82     | WRITE_RSP        | MCU → PC |
-| 0x10     | STREAM_START_REQ | PC → MCU |
-| 0x90     | STREAM_START_RSP | MCU → PC |
-| 0x11     | STREAM_STOP_REQ  | PC → MCU |
-| 0x91     | STREAM_STOP_RSP  | MCU → PC |
-| 0x15     | STREAM_DATA      | MCU → PC |
+## 4. FLAGS 定义
 
----
+| Bit | Mask | 名称 | 说明 |
+|---|---|---|---|
+| 0 | 0x01 | ACK_REQ | 请求 ACK/响应 |
+| 1 | 0x02 | ACK_FRAME | ACK/响应帧 |
+| 2 | 0x04 | ERROR | 错误响应 |
+| 3 | 0x08 | BROADCAST | 广播帧提示 |
+| 4~7 | - | Reserved | 保留 |
 
-# 5. DATA格式
+示例：
+
+| FLAGS | 含义 |
+|---|---|
+| 0x00 | 普通数据帧 |
+| 0x01 | 请求 ACK |
+| 0x02 | ACK 响应 |
+| 0x06 | ACK 响应 + 错误 |
+| 0x09 | 广播请求 |
+
+## 5. ACK 请求表、超时和重发
+
+发送方调用 `UF4_SendFrameTo()`，且 `FLAGS` 包含 `UF4_FLAG_ACK_REQ` 时，协议层会登记请求表：
+
+- 匹配条件：`响应 SRC == 请求 DST`、`响应 SEQ == 请求 SEQ`、`响应 CMD == 请求 CMD 对应的 RSP CMD`。
+- 默认超时：`50 ms`。
+- 默认重发：`3` 次。
+- 请求表容量：`8` 个未完成请求。
+- 广播请求不会进入请求表。
+
+应用层需要周期调用：
+
+```c
+UF4_ProcessMs(now_ms);
+```
+
+如果仍使用旧接口 `UF4_Process()`，内部会按每次调用递增 1 ms 处理，但正式固件建议使用真实毫秒 tick。
+
+可注册 ACK 事件：
+
+```c
+UF4_SetAckEventCallback(MyAckEvent, user_ctx);
+```
+
+主站需要读取 `READ_RSP` 或 `STREAM_DATA` 时，注册完整帧回调：
+
+```c
+UF4_SetFrameRxCallback(MyFrameRx, user_ctx);
+```
+
+`ACK_FRAME` 会先完成请求表匹配，再交给帧回调，因此应用层可以同时获得 ACK 状态和响应 payload。
+
+状态包括：
+
+| 状态 | 说明 |
+|---|---|
+| `UF4_ACK_DONE` | 收到匹配 ACK/响应 |
+| `UF4_ACK_TIMEOUT` | 重发次数耗尽 |
+| `UF4_ACK_DROPPED` | 请求表已满或无法登记 |
+
+## 6. CMD 定义
+
+| CMD(hex) | 名称 | 方向 |
+|---|---|---|
+| 0x01 | READ_REQ | Master -> Slave |
+| 0x81 | READ_RSP | Slave -> Master |
+| 0x02 | WRITE_REQ | Master -> Slave |
+| 0x82 | WRITE_RSP | Slave -> Master |
+| 0x10 | STREAM_START_REQ | Master -> Slave |
+| 0x90 | STREAM_START_RSP | Slave -> Master |
+| 0x11 | STREAM_STOP_REQ | Master -> Slave |
+| 0x91 | STREAM_STOP_RSP | Slave -> Master |
+| 0x15 | STREAM_DATA | Slave -> Master |
+
+## 7. DATA 格式
 
 采用固定长度 TV 格式。
 
-## 单个数据项
-
-| 字段    | 长度(Byte) |
-|-------|---------:|
-| ID    |        1 |
-| VALUE |        2 |
-
-总长度：
-
-| 项目   | 长度(Byte) |
-|------|---------:|
-| 单个TV |        3 |
-
----
-
-## 数据格式
-
-```text
-+------+----------+
-| ID   | VALUE    |
-+------+----------+
- 1Byte   2Byte
-```
-
----
-
-## VALUE定义
-
-| 类型       | 长度     | 范围        |
-|----------|--------|-----------|
-| uint16_t | 2 Byte | 0 ~ 65535 |
-
-## VALUE字节序
-
-| 字段    | 顺序              |
-|-------|-----------------|
-| VALUE | VALUE_H VALUE_L |
-
-即：
-
-```text
-Big Endian
-```
-
-适用于：
-
-- 电压
-- 电流
-- 温度
-- PWM
-- ADC
-- DAC
-- 风扇转速
-- 状态量
-
----
-
-# 6. LEN定义
-
-LEN表示：
-
-```text
-DATA总字节数(Byte)
-```
-
-约束：
-
-| 项目            | 规则                  |
-|---------------|---------------------|
-| 最大值           | 255 Byte            |
-| READ/WRITE/STREAM | 必须是3的整数倍          |
-| 无DATA响应        | LEN = 0             |
-
-## 示例
-
-| 数据项数量 | DATA长度(Byte) | LEN |
-|------:|-------------:|----:|
-|     1 |            3 |   3 |
-|     2 |            6 |   6 |
-|     3 |            9 |   9 |
-|     4 |           12 |  12 |
-|     8 |           24 |  24 |
-
----
-
-# 7. READ示例
-
-## 上位机发送
-
-读取：
-
-- INPUT_VOLTAGE
-- INPUT_CURRENT
-- OUTPUT_VOLTAGE
-
-| 字段    | 值                          |
-|-------|----------------------------|
-| SOF   | AA 55                      |
-| SEQ   | 01                         |
-| FLAGS | 01                         |
-| CMD   | 01                         |
-| LEN   | 09                         |
-| DATA  | 0A 00 00 0B 00 00 0C 00 00 |
-
----
-
-## 下位机回复
-
-| 字段    | 值                          |
-|-------|----------------------------|
-| SOF   | AA 55                      |
-| SEQ   | 01                         |
-| FLAGS | 02                         |
-| CMD   | 81                         |
-| LEN   | 09                         |
-| DATA  | 0A 33 20 0B 01 40 0C 12 34 |
-
----
-
-## DATA解析
-
-| ID   | VALUE(hex) | VALUE(dec) |
-|------|------------|-----------:|
-| 0x0A | 0x3320     |      13088 |
-| 0x0B | 0x0140     |        320 |
-| 0x0C | 0x1234     |       4660 |
-
----
-
-# 8. WRITE示例
-
-## 上位机发送
-
-设置：
-
-| 参数                |   数值 |
-|-------------------|-----:|
-| SET_VOLTAGE_LIMIT | 2500 |
-| SET_CURRENT_LIMIT | 1000 |
-| FAN_SET_VALUE     |  100 |
-
-对应DATA：
-
-| Byte流                      |
-|----------------------------|
-| 11 09 C4 12 03 E8 27 00 64 |
-
-完整帧：
-
-| 字段    | 值                          |
-|-------|----------------------------|
-| SOF   | AA55                       |
-| SEQ   | 02                         |
-| FLAGS | 01                         |
-| CMD   | 02                         |
-| LEN   | 09                         |
-| DATA  | 11 09 C4 12 03 E8 27 00 64 |
-
----
-
-## 下位机回复
-
-| 字段    | 值    |
-|-------|------|
-| SOF   | AA55 |
-| SEQ   | 02   |
-| FLAGS | 02   |
-| CMD   | 82   |
-| LEN   | 09   |
-| DATA  | 原样回显 |
-
----
-
-# 9. STREAM_START示例
-
-## 上位机发送
-
-启动周期上传：
-
-- 输入电压
-- 输入电流
-- 输出电压
-
-| 字段   | 值                          |
-|------|----------------------------|
-| CMD  | 10                         |
-| LEN  | 09                         |
-| DATA | 0A 00 00 0B 00 00 0C 00 00 |
-
----
-
-## 下位机回复
-
-| 字段  | 值  |
-|-----|----|
-| CMD | 90 |
-| LEN | 00 |
-
----
-
-# 10. STREAM_DATA示例
-
-下位机主动发送：
-
-| 字段    | 值                          |
-|-------|----------------------------|
-| CMD   | 15                         |
-| FLAGS | 00                         |
-| LEN   | 09                         |
-| DATA  | 0A 33 20 0B 01 40 0C 12 34 |
-
-说明：
-
-```text
-主动上传数据
-无需ACK
-```
-
----
-
-# 11. STREAM_STOP示例
-
-## 上位机发送
-
-| 字段  | 值  |
-|-----|----|
-| CMD | 11 |
-| LEN | 00 |
-
----
-
-## 下位机回复
-
-| 字段  | 值  |
-|-----|----|
-| CMD | 91 |
-| LEN | 00 |
-
----
-
-# 12. 错误响应
-
-## 错误帧格式
-
-| 字段    | 值              |
-|-------|----------------|
-| FLAGS | 06             |
-| CMD   | 原响应CMD         |
-| LEN   | 03             |
-| DATA  | FF ERR_H ERR_L |
-
-说明：
-
-- `DATA[0] = 0xFF` 表示错误项。
-- `DATA[1..2]` 为错误码，顺序为 `ERR_H ERR_L`。
-- CRC错误通常只能由接收端丢弃该帧；如果帧无法通过CRC校验，接收端无法可靠获取 `SEQ/CMD`，因此不保证返回 `CRC_ERROR` 帧。
-
----
-
-## 示例
-
-读取不存在ID：
-
-| 字段    | 值        |
-|-------|----------|
-| SOF   | AA55     |
-| SEQ   | 03       |
-| FLAGS | 06       |
-| CMD   | 81       |
-| LEN   | 03       |
-| DATA  | FF 00 01 |
-
----
-
-# 13. 错误码定义
-
-| 错误码    | 名称             | 说明    |
-|--------|----------------|-------|
-| 0x0000 | OK             | 成功    |
-| 0x0001 | INVALID_ID     | ID不存在 |
-| 0x0002 | INVALID_CMD    | 命令错误  |
-| 0x0003 | CRC_ERROR      | CRC错误 |
-| 0x0004 | INVALID_LEN    | 长度错误  |
-| 0x0005 | WRITE_PROTECT  | 不允许写入 |
-| 0x0006 | OUT_OF_RANGE   | 参数超范围 |
-| 0x0007 | DEVICE_BUSY    | 设备忙   |
-| 0x0008 | INTERNAL_ERROR | 内部错误  |
-
----
-
-# 14. 数据ID定义
-
-| ID(hex) | 名称                             | RW | 单位   | 说明       |
-|---------|--------------------------------|----|------|----------|
-| 0x0A    | INPUT_VOLTAGE                  | R  | mV   | 输入电压     |
-| 0x0B    | INPUT_CURRENT                  | R  | mA   | 输入电流     |
-| 0x0C    | OUTPUT_VOLTAGE                 | R  | mV   | 输出电压     |
-| 0x0D    | OUTPUT_CURRENT                 | R  | mA   | 输出电流     |
-| 0x0E    | CORE_TEMPERATURE               | R  | 0.01℃ | 核心温度     |
-| 0x0F    | TEMP1_TEMPERATURE              | R  | 0.01℃ | 第一温度     |
-| 0x10    | TEMP2_TEMPERATURE              | R  | 0.01℃ | 第二温度     |
-| 0x11    | SET_VOLTAGE_LIMIT              | RW | mV   | 电压设定值    |
-| 0x12    | SET_CURRENT_LIMIT              | RW | mA   | 电流设定值    |
-| 0x14    | CC_CV_MODE                     | R  | -    | CC/CV模式  |
-| 0x15    | POWER_STATE                    | RW | -    | 电源状态     |
-| 0x16    | FAULT_STATE                    | R  | -    | 故障状态     |
-| 0x17    | STATE_MACHINE_FLAG_BITS        | R  | -    | 状态机标志    |
-| 0x18    | STATE_MACHINE_STATE            | R  | -    | 状态机状态    |
-| 0x19    | INPUT_VOLTAGE_RAW              | R  | ADC  | 原始输入电压   |
-| 0x1A    | INPUT_CURRENT_RAW              | R  | ADC  | 原始输入电流   |
-| 0x1B    | OUTPUT_VOLTAGE_RAW             | R  | ADC  | 原始输出电压   |
-| 0x1C    | OUTPUT_CURRENT_RAW             | R  | ADC  | 原始输出电流   |
-| 0x1D    | OTP_VALUE                      | R  | 0.01℃ | 当前OTP值   |
-| 0x1E    | OTP_SET_VALUE                  | RW | 0.01℃ | OTP设定值   |
-| 0x1F    | OVP_VALUE                      | R  | mV   | 当前OVP值   |
-| 0x20    | OVP_SET_VALUE                  | RW | mV   | OVP设定值   |
-| 0x21    | OCP_VALUE                      | R  | mA   | 当前OCP值   |
-| 0x22    | OCP_SET_VALUE                  | RW | mA   | OCP设定值   |
-| 0x23    | DUTY_CMD                       | RW | ‰    | 占空比命令    |
-| 0x24    | PWM_A_COMPARE                  | R  | Tick | PWM_A比较值 |
-| 0x25    | PWM_D_COMPARE                  | R  | Tick | PWM_D比较值 |
-| 0x26    | FAN_SPEED                      | R  | RPM  | 风扇转速     |
-| 0x27    | FAN_SET_VALUE                  | RW | %    | 风扇设定值    |
-| 0x29    | LOOP_CURRENT_FEEDBACK          | R  | ADC  | 电流反馈     |
-| 0x2A    | LOOP_CURRENT_REFERENCE         | R  | ADC  | 电流参考     |
-| 0x2B    | VOLTAGE_LOOP_CURRENT_REFERENCE | R  | ADC  | 电压环参考    |
-
----
-
-# 15. 协议特点
-
-| 特性          | 支持 |
-|-------------|----|
-| CRC校验       | ✓  |
-| ACK机制       | ✓  |
-| 错误响应        | ✓  |
-| 请求响应分离      | ✓  |
-| 批量读写        | ✓  |
-| 流模式         | ✓  |
-| 固定长度解析      | ✓  |
-| STM32状态机友好  | ✓  |
-| USB CDC     | ✓  |
-| RS485       | ✓  |
-| TCP透传       | ✓  |
-| WebSocket透传 | ✓  |
-
----
-
-# 16. 当前C代码接入方式
-
-## 初始化
-
-应用层需要先注册ID表，再初始化协议发送回调：
+| 字段 | 长度(Byte) | 说明 |
+|---|---:|---|
+| ID | 1 | 数据 ID |
+| VALUE | 2 | `VALUE_H VALUE_L`，大端 |
+
+READ/WRITE/STREAM 请求中，`LEN` 必须是 3 的整数倍。无 DATA 响应时 `LEN = 0`。
+
+## 8. 错误响应
+
+错误帧格式：
+
+| 字段 | 值 |
+|---|---|
+| FLAGS | `UF4_FLAG_ACK_FRAME | UF4_FLAG_ERROR` |
+| CMD | 对应响应 CMD |
+| LEN | 03 |
+| DATA | `FF ERR_H ERR_L` |
+
+CRC 错误通常只能丢弃该帧；如果帧无法通过 CRC 校验，接收端无法可靠获取 `SRC/DST/SEQ/CMD`，因此不保证返回 `CRC_ERROR` 帧。
+
+## 9. 错误码定义
+
+| 错误码 | 名称 | 说明 |
+|---|---|---|
+| 0x0000 | OK | 成功 |
+| 0x0001 | INVALID_ID | ID 不存在 |
+| 0x0002 | INVALID_CMD | 命令错误 |
+| 0x0003 | CRC_ERROR | CRC 错误 |
+| 0x0004 | INVALID_LEN | 长度错误 |
+| 0x0005 | WRITE_PROTECT | 不允许写入 |
+| 0x0006 | OUT_OF_RANGE | 参数超范围 |
+| 0x0007 | DEVICE_BUSY | 设备忙 |
+| 0x0008 | INTERNAL_ERROR | 内部错误 |
+| 0x0009 | TIMEOUT | ACK 超时 |
+| 0x000A | NO_PENDING_SLOT | 请求表无空位 |
+| 0x000B | NOT_FOR_THIS_DEVICE | 目标设备不匹配 |
+| 0x000C | ARBITRATION | 仲裁失败 |
+
+## 10. C 代码接入方式
+
+初始化从站：
 
 ```c
+static const uf4_config_t config = {
+    .local_id = 0x11,
+    .role = UF4_ROLE_SLAVE,
+    .ack_timeout_ms = 50,
+    .ack_retries = 3,
+    .arbitration_slot_ms = 2,
+};
+
 UF4_IDTableBind(g_id_table, table_count);
-UF4_Init(MyTxBytes, user_ctx);
+UF4_InitEx(&config, MyTxBytes, user_ctx);
 ```
 
-其中 `MyTxBytes` 负责把协议层生成的字节流发到 UART、USB CDC、RS485 或 TCP。
+主站发送读请求：
 
-## 接收
+```c
+uint8_t data[] = {
+    UF4_ID_INPUT_VOLTAGE, 0x00, 0x00,
+    UF4_ID_INPUT_CURRENT, 0x00, 0x00,
+};
 
-每收到1字节就送入解析器：
+UF4_SendFrameTo(0x11,
+                seq,
+                UF4_FLAG_ACK_REQ,
+                UF4_CMD_READ_REQ,
+                data,
+                sizeof(data));
+```
+
+接收入口：
 
 ```c
 UF4_InputByte(byte);
 ```
 
-如果已经有一段连续缓冲区，也可以使用：
+周期任务：
 
 ```c
-UF4_InputBuffer(buffer, len);
+UF4_ProcessMs(system_ms);
 ```
 
-## 周期任务
+## 11. 数据 ID 定义
 
-如果启用了流模式，应用层需要周期调用：
-
-```c
-UF4_Process();
-```
-
-当前实现中，`UF4_Process()` 会调用 `UF4_StreamTask()` 发送 `STREAM_DATA`。
+| ID(hex) | 名称 | RW | 单位 | 说明 |
+|---|---|---|---|---|
+| 0x0A | INPUT_VOLTAGE | R | mV | 输入电压 |
+| 0x0B | INPUT_CURRENT | R | mA | 输入电流 |
+| 0x0C | OUTPUT_VOLTAGE | R | mV | 输出电压 |
+| 0x0D | OUTPUT_CURRENT | R | mA | 输出电流 |
+| 0x0E | CORE_TEMPERATURE | R | 0.01C | 核心温度 |
+| 0x0F | TEMP1_TEMPERATURE | R | 0.01C | 第一温度 |
+| 0x10 | TEMP2_TEMPERATURE | R | 0.01C | 第二温度 |
+| 0x11 | SET_VOLTAGE_LIMIT | RW | mV | 电压设定值 |
+| 0x12 | SET_CURRENT_LIMIT | RW | mA | 电流设定值 |
+| 0x14 | CC_CV_MODE | R | - | CC/CV 模式 |
+| 0x15 | POWER_STATE | RW | - | 电源状态 |
+| 0x16 | FAULT_STATE | R | - | 故障状态 |
+| 0x17 | STATE_MACHINE_FLAG_BITS | R | - | 状态机标志 |
+| 0x18 | STATE_MACHINE_STATE | R | - | 状态机状态 |
+| 0x19 | INPUT_VOLTAGE_RAW | R | ADC | 原始输入电压 |
+| 0x1A | INPUT_CURRENT_RAW | R | ADC | 原始输入电流 |
+| 0x1B | OUTPUT_VOLTAGE_RAW | R | ADC | 原始输出电压 |
+| 0x1C | OUTPUT_CURRENT_RAW | R | ADC | 原始输出电流 |
+| 0x1D | OTP_VALUE | R | 0.01C | 当前 OTP 值 |
+| 0x1E | OTP_SET_VALUE | RW | 0.01C | OTP 设定值 |
+| 0x1F | OVP_VALUE | R | mV | 当前 OVP 值 |
+| 0x20 | OVP_SET_VALUE | RW | mV | OVP 设定值 |
+| 0x21 | OCP_VALUE | R | mA | 当前 OCP 值 |
+| 0x22 | OCP_SET_VALUE | RW | mA | OCP 设定值 |
+| 0x23 | DUTY_CMD | RW | permille | 占空比命令 |
+| 0x24 | PWM_A_COMPARE | R | Tick | PWM_A 比较值 |
+| 0x25 | PWM_D_COMPARE | R | Tick | PWM_D 比较值 |
+| 0x26 | FAN_SPEED | R | RPM | 风扇转速 |
+| 0x27 | FAN_SET_VALUE | RW | % | 风扇设定值 |
+| 0x29 | LOOP_CURRENT_FEEDBACK | R | ADC | 电流反馈 |
+| 0x2A | LOOP_CURRENT_REFERENCE | R | ADC | 电流参考 |
+| 0x2B | VOLTAGE_LOOP_CURRENT_REFERENCE | R | ADC | 电压环参考 |
