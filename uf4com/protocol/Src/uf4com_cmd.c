@@ -3,7 +3,7 @@
   * @file    uf4com_cmd.c
   * @author  UF4
   * @date    26-6-13 下午1:41
-  * @brief   UF4COM command dispatcher
+  * @brief   UF4COM 命令调度器
   ******************************************************************************
   */
 #include "uf4com_cmd.h"
@@ -64,15 +64,15 @@ static uint8_t UF4_ShouldReply(const uf4_frame_t *frame)
 
     if((frame->flags & UF4_FLAG_ACK_REQ) == 0u)
     {
-        // ACK_REQ is the contract: without it, WRITE can be fire-and-forget and
-        // READ is effectively a silent request. PC side should set ACK_REQ.
+        // ACK_REQ 是请求响应契约：不带它时，WRITE 可以是只发不等；
+        // READ 则等价于静默请求。上位机正常读写时应该置位 ACK_REQ。
         return 0u;
     }
 
     if(frame->dst == UF4_BROADCAST_ID || frame->src == UF4_BROADCAST_ID)
     {
-        // Never ACK broadcast. One command may hit many slaves, and simultaneous
-        // ACKs are exactly what kills a half-duplex bus.
+        // 广播绝不 ACK。一个命令可能命中多个从站，同时 ACK 正是半双工总线
+        // 最容易撞包的地方。
         return 0u;
     }
 
@@ -92,8 +92,8 @@ static void UF4_HandleRead(uf4_frame_t *frame)
 
     for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
     {
-        // READ request uses TV format too. VALUE bytes are ignored but kept so
-        // READ/WRITE/STREAM all share the same item packing.
+        // READ 请求也使用 TV 格式。VALUE 字节会被忽略，但保留下来能让
+        // READ / WRITE / STREAM 共用同一种数据项打包方式。
         const uint8_t id = frame->data[i];
         uf4_id_t *item = UF4_FindID(id);
 
@@ -142,8 +142,8 @@ static void UF4_HandleWrite(uf4_frame_t *frame)
 
         if(item->rw == 0u)
         {
-            // Fail the whole WRITE on first protected item. Partial writes before
-            // this point remain applied; keep payload small if atomicity matters.
+        // 遇到第一个写保护项就停止整个 WRITE。注意：此前已经写入的项
+        // 不会回滚；如果业务要求原子性，就把载荷控制小一点。
             UF4_SendError(frame, UF4_CMD_WRITE_RSP, UF4_ERR_WRITE_PROTECT);
             return;
         }
@@ -180,8 +180,8 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
 
     if(frame->len == 0u)
     {
-        // Empty STREAM_START means "stream every registered ID". This is handy
-        // for bring-up, but production masters usually request a shorter list.
+        // 空 STREAM_START 表示“流式上传全部已注册 ID”。调机时方便，
+        // 量产主站通常应该请求更短的 ID 列表。
         g_stream_count = (uint8_t)UF4_GetAllIDs(g_stream_ids, UF4_MAX_STREAM_IDS);
     }
     else
@@ -190,7 +190,7 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
         {
             if(UF4_FindID(frame->data[i]) == NULL)
             {
-                // Do not leave a half-configured stream running after bad input.
+                // 输入有坏 ID 时，不要留下半配置状态的流模式。
                 g_stream_enable = 0u;
                 g_stream_count = 0u;
                 UF4_SendError(frame, UF4_CMD_STREAM_START_RSP, UF4_ERR_INVALID_ID);
@@ -245,8 +245,8 @@ void UF4_StreamTask(void)
 
         if(item == NULL || (uint16_t)(len + UF4_TV_SIZE) > UF4_MAX_DATA_LEN)
         {
-            // The ID table may change at runtime on some targets. Skip stale IDs
-            // rather than killing the stream task.
+            // 有些目标上 ID 表可能运行时变化。遇到过期 ID 时跳过，
+            // 不要把整个流任务打死。
             continue;
         }
 
@@ -270,8 +270,8 @@ static void UF4_SendError(const uf4_frame_t *frame, uint8_t rsp_cmd, uf4_error_t
 
     if(UF4_ShouldReply(frame) == 0u)
     {
-        // If the requester did not ask for ACK, there is nowhere reliable to put
-        // the error. Silently dropping mirrors CRC-error behavior.
+        // 请求方没要求 ACK 时，错误也没有可靠回传位置。这里静默丢弃，
+        // 行为和 CRC 错误类似。
         return;
     }
 

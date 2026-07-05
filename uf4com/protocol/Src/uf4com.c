@@ -3,7 +3,7 @@
   * @file    uf4com.c
   * @author  UF4
   * @date    26-6-13 下午1:39
-  * @brief   UF4COM V4 frame build, ACK tracking and RX entry
+  * @brief   UF4COM V4 构帧、ACK 跟踪和接收入口
   ******************************************************************************
   */
 #include "uf4com.h"
@@ -35,8 +35,8 @@ static void UF4_LoadDefaultConfig(uf4_config_t *config)
 
 static uint8_t UF4_ResponseCmdFor(uint8_t cmd)
 {
-    // Request table stores the response command we expect to see on the wire.
-    // That keeps ACK matching cheap: SRC + SEQ + CMD is enough for V4.
+    // 请求表里存的是期望收到的响应命令。这样 ACK 匹配只需要看
+    // SRC + SEQ + CMD，逻辑简单，查表也快。
     switch(cmd)
     {
         case UF4_CMD_READ_REQ:
@@ -58,8 +58,8 @@ static uint8_t UF4_ResponseCmdFor(uint8_t cmd)
 
 static uint8_t UF4_IsRequestCmd(uint8_t cmd)
 {
-    // Only these commands are handled inside uf4com_cmd.c. Response frames and
-    // STREAM_DATA belong to the application callback after optional ACK matching.
+    // 只有这些请求命令交给 uf4com_cmd.c 处理。响应帧和 STREAM_DATA
+    // 在可选 ACK 匹配之后交给应用层回调。
     switch(cmd)
     {
         case UF4_CMD_READ_REQ:
@@ -95,8 +95,8 @@ static uint8_t UF4_AddRequest(uint8_t dst,
                               const uint8_t *frame,
                               uint16_t frame_len)
 {
-    // Broadcast is fire-and-forget. If every slave ACKed the same broadcast,
-    // half-duplex buses would collide immediately.
+    // 广播是 fire-and-forget。如果每个从站都 ACK 同一个广播，
+    // 半双工总线会立刻撞包。
     if(dst == UF4_BROADCAST_ID || frame == NULL || frame_len > UF4_MAX_FRAME_LEN)
     {
         return 1u;
@@ -106,8 +106,8 @@ static uint8_t UF4_AddRequest(uint8_t dst,
     {
         if(s_requests[i].active == 0u)
         {
-            // Store the encoded frame, not just user payload. Retransmit must be
-            // byte-identical to the first send, including SEQ and CRC.
+            // 保存编码后的整帧，而不是只保存用户 payload。重发必须和第一次发送
+            // 字节一致，包括 SEQ 和 CRC。
             s_requests[i].seq = seq;
             s_requests[i].dst = dst;
             s_requests[i].cmd = expected_cmd;
@@ -139,8 +139,8 @@ static uint8_t UF4_MatchAck(const uf4_frame_t *frame)
 
     for(uint8_t i = 0u; i < UF4_MAX_PENDING_REQUESTS; i++)
     {
-        // DST in the request becomes SRC in the response. SEQ must echo. CMD is
-        // the expected response command, e.g. READ_REQ waits for READ_RSP.
+        // 请求里的 DST 会变成响应里的 SRC。SEQ 必须回显。CMD 是期望响应命令，
+        // 例如 READ_REQ 等待 READ_RSP。
         if(s_requests[i].active != 0u &&
            s_requests[i].dst == frame->src &&
            s_requests[i].seq == frame->seq &&
@@ -178,8 +178,8 @@ void UF4_InitEx(const uf4_config_t *config, uf4_tx_fn_t tx, void *user)
         s_config.arbitration_slot_ms = UF4_DEFAULT_ARBITRATION_SLOT_MS;
     }
 
-    // Re-init is allowed. It intentionally clears pending requests because the
-    // local address, role or timeout policy may have changed.
+    // 允许重复初始化。这里故意清空请求表，因为本机地址、角色或超时策略
+    // 可能已经变了，旧请求继续等没有意义。
     s_tx = tx;
     s_tx_user = user;
     s_now_ms = 0u;
@@ -216,8 +216,8 @@ void UF4_NotifyWriteApplied(void)
 
 void UF4_Process(void)
 {
-    // Compatibility path for old code. Real firmware should call UF4_ProcessMs()
-    // with a system tick; this fallback assumes the caller runs it every 1 ms.
+    // 兼容旧代码的路径。正式固件建议传入真实系统 tick 调 UF4_ProcessMs()；
+    // 这里假设调用方每 1 ms 调一次。
     s_now_ms++;
     UF4_ProcessMs(s_now_ms);
 }
@@ -250,8 +250,8 @@ void UF4_ProcessMs(uint32_t now_ms)
 
         if(s_tx != NULL)
         {
-            // retries_left counts retransmissions, not the initial send. So a
-            // value of 3 means: first send + up to 3 resends.
+            // retries_left 统计的是重发次数，不包含第一次发送。所以值为 3 表示：
+            // 第一次发送 + 最多 3 次重发。
             s_tx(s_requests[i].frame, s_requests[i].frame_len, s_tx_user);
         }
 
@@ -279,8 +279,8 @@ uint32_t UF4_GetArbitrationDelayMs(uint8_t device_id)
         return 0u;
     }
 
-    // Lower ID gets an earlier slot. This is only the protocol-side slot helper;
-    // the RS485 driver still needs bus-idle detection before enabling TX.
+    // ID 越小，时隙越靠前。这里只是协议侧时隙计算辅助函数；
+    // RS485 驱动在打开发送使能前仍然需要做总线空闲检测。
     return (uint32_t)device_id * (uint32_t)s_config.arbitration_slot_ms;
 }
 
@@ -318,8 +318,8 @@ uint16_t UF4_BuildFrameTo(uint8_t src,
 
     if(dst == UF4_BROADCAST_ID)
     {
-        // Keep the explicit flag as a cheap hint for sniffers/loggers. Dispatch
-        // still trusts DST == 0xFF as the real broadcast decision.
+        // 显式带上 BROADCAST 标志，方便抓包器和日志快速判断。
+        // 真正的广播判断仍然以 DST == 0xFF 为准。
         flags |= UF4_FLAG_BROADCAST;
     }
 
@@ -390,8 +390,8 @@ uint8_t UF4_SendFrameTo(uint8_t dst,
 
     if((flags & UF4_FLAG_ACK_REQ) != 0u && (flags & UF4_FLAG_ACK_FRAME) == 0u)
     {
-        // Tracking happens after the first send. If the request table is full,
-        // the caller gets 0 and the ACK event reports UF4_ACK_DROPPED.
+        // 第一次发送完成后才登记请求表。如果请求表满了，调用方拿到 0，
+        // ACK 事件会上报 UF4_ACK_DROPPED。
         return UF4_AddRequest(dst, seq, UF4_ResponseCmdFor(cmd), buffer, frame_len);
     }
 
@@ -418,15 +418,15 @@ uint8_t UF4_InputByte(uint8_t byte)
 
     if(UF4_IsFrameForLocalDevice(&frame) == 0u)
     {
-        // Important on shared buses: a valid CRC frame may still be for another
-        // slave. Drop it silently so we do not create bus chatter.
+        // 共享总线上很重要：CRC 正确的帧也可能是发给别的从站的。
+        // 静默丢弃，避免制造额外总线 chatter。
         return 0u;
     }
 
     if((frame.flags & UF4_FLAG_ACK_FRAME) != 0u)
     {
-        // ACK matching is protocol housekeeping. The frame is still delivered so
-        // READ_RSP/WRITE_RSP payload stays visible to the application.
+        // ACK 匹配是协议层内部事务。帧仍然会继续送给应用层，
+        // 这样 READ_RSP / WRITE_RSP 的载荷不会被吞掉。
         (void)UF4_MatchAck(&frame);
 
         if(s_frame_rx != NULL)

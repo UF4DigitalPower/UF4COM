@@ -3,7 +3,7 @@
   * @file    uf4com_parser.c
   * @author  UF4
   * @date    26-6-13 下午1:41
-  * @brief   UF4COM V4 stream parser
+  * @brief   UF4COM V4 字节流解析器
   ******************************************************************************
   */
 #include "uf4com_parser.h"
@@ -13,8 +13,8 @@ static uint16_t UF4_FrameCRC(const uf4_frame_t *frame)
 {
     uint8_t crc_data[6u + UF4_MAX_DATA_LEN];
 
-    // V4 deliberately includes SRC/DST in CRC. A flipped address bit must not
-    // turn into a valid command for the wrong slave.
+    // V4 故意把 SRC/DST 放进 CRC。地址位翻转不能变成发给错误从站的
+    // 合法命令。
     crc_data[0] = frame->src;
     crc_data[1] = frame->dst;
     crc_data[2] = frame->seq;
@@ -58,13 +58,13 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
     switch(parser->state)
     {
         case WAIT_SOF1:
-            // Any byte stream noise is ignored until AA 55 appears again.
+            // 字节流里的噪声一律忽略，直到再次看到 AA 55。
             parser->state = (byte == UF4_SOF1) ? WAIT_SOF2 : WAIT_SOF1;
             break;
 
         case WAIT_SOF2:
-            // If the second byte is wrong, restart from SOF1. This keeps the
-            // parser simple and bounded; no history buffer needed.
+            // 第二个帧头字节不对就回到 SOF1。这样 parser 简单且有界，
+            // 不需要额外历史缓冲。
             parser->state = (byte == UF4_SOF2) ? WAIT_SRC : WAIT_SOF1;
             break;
 
@@ -102,8 +102,7 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
         case WAIT_DATA:
             if(parser->data_index >= UF4_MAX_DATA_LEN)
             {
-                // LEN is one byte, so this is mostly defensive against future
-                // format changes or a corrupted parser state.
+                // LEN 只有 1 字节，这里主要是防御未来格式变化或 parser 状态损坏。
                 UF4_ParserInit(parser);
                 return 0u;
             }
@@ -132,8 +131,7 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
                 *out_frame = parser->frame;
             }
 
-            // Always reset after CRC, valid or not. A bad frame must not leak
-            // partial state into the next frame.
+            // CRC 检查后无论成功失败都复位。坏帧不能把半截状态带进下一帧。
             UF4_ParserInit(parser);
             return valid;
         }
