@@ -20,6 +20,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define UF4_ID_PERMISSION_RO 0u
+#define UF4_ID_PERMISSION_RW 1u
+
 typedef struct
 {
   uint8_t id;

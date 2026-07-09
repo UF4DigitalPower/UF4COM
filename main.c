@@ -20,12 +20,12 @@ static uf4_ack_status_t g_ack_status = UF4_ACK_PENDING;
 
 static uf4_id_t g_id_table[] =
 {
-    {UF4_ID_INPUT_VOLTAGE, &g_input_voltage, 0u},
-    {UF4_ID_INPUT_CURRENT, &g_input_current, 0u},
-    {UF4_ID_OUTPUT_VOLTAGE, &g_output_voltage, 0u},
-    {UF4_ID_SET_VOLTAGE_LIMIT, &g_set_voltage, 1u},
-    {UF4_ID_SET_CURRENT_LIMIT, &g_set_current, 1u},
-    {UF4_ID_FAN_SET_VALUE, &g_fan_set, 1u},
+    {UF4_ID_INPUT_VOLTAGE, &g_input_voltage, UF4_ID_PERMISSION_RO},
+    {UF4_ID_INPUT_CURRENT, &g_input_current, UF4_ID_PERMISSION_RO},
+    {UF4_ID_OUTPUT_VOLTAGE, &g_output_voltage, UF4_ID_PERMISSION_RO},
+    {UF4_ID_SET_VOLTAGE_LIMIT, &g_set_voltage, UF4_ID_PERMISSION_RW},
+    {UF4_ID_SET_CURRENT_LIMIT, &g_set_current, UF4_ID_PERMISSION_RW},
+    {UF4_ID_FAN_SET_VALUE, &g_fan_set, UF4_ID_PERMISSION_RW},
 };
 
 static void CaptureTx(const uint8_t *data, uint16_t len, void *user)

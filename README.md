@@ -22,7 +22,7 @@ V4 在 V3 基础上增加了设备 ID、主从站寻址、ACK 请求表、超时
 - `0x00` 默认是主站 ID，`0xFF` 是广播 ID。
 - 广播请求不会产生 ACK/响应，避免一对多同时回包撞线。
 - TV 数据项固定为 3 字节：`ID VALUE_H VALUE_L`。
-- `rw == 0` 表示只读，`rw != 0` 表示可写。
+- `rw == UF4_ID_PERMISSION_RO` 表示只读，`rw == UF4_ID_PERMISSION_RW` 表示可写。
 - `ACK_REQ` 只对非广播请求生效；接收端仅在请求带 `ACK_REQ` 时返回 `ACK_FRAME`。
 
 ## 1. 帧格式

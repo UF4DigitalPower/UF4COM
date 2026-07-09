@@ -140,7 +140,7 @@ static void UF4_HandleWrite(uf4_frame_t *frame)
             return;
         }
 
-        if(item->rw == 0u)
+        if(item->rw == UF4_ID_PERMISSION_RO)
         {
         // 遇到第一个写保护项就停止整个 WRITE。注意：此前已经写入的项
         // 不会回滚；如果业务要求原子性，就把载荷控制小一点。
