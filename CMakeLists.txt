@@ -16,6 +16,7 @@ file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS
 )
 
 add_executable(UF4COM ${SRC_FILES} main.c)
+set_target_properties(UF4COM PROPERTIES OUTPUT_NAME UF4COM_C_SLAVE_PC)
 
 target_include_directories(UF4COM PRIVATE
         uf4com/protocol/Inc
