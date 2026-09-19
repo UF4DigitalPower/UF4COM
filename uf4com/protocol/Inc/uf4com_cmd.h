@@ -21,6 +21,8 @@
 
 void UF4_Dispatch(uf4_frame_t *frame);
 void UF4_StreamTask(void);
+void UF4_StreamStop(void);
+void UF4_ResetCommandState(void);
 void UF4_NotifyWriteApplied(void);
 
 #endif // UF4COM_CMD_H

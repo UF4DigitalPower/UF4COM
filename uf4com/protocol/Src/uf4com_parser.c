@@ -3,7 +3,7 @@
   * @file    uf4com_parser.c
   * @author  UF4
   * @date    26-6-13 下午1:41
-  * @brief   UF4COM V4 字节流解析器
+  * @brief   UF4COM V5 字节流解析器
   ******************************************************************************
   */
 #include "uf4com_parser.h"
@@ -11,23 +11,19 @@
 
 static uint16_t UF4_FrameCRC(const uf4_frame_t *frame)
 {
-    uint8_t crc_data[6u + UF4_MAX_DATA_LEN];
+    uint8_t crc_data[4u + UF4_MAX_DATA_LEN];
 
-    // V4 故意把 SRC/DST 放进 CRC。地址位翻转不能变成发给错误从站的
-    // 合法命令。
-    crc_data[0] = frame->src;
-    crc_data[1] = frame->dst;
-    crc_data[2] = frame->seq;
-    crc_data[3] = frame->flags;
-    crc_data[4] = frame->cmd;
-    crc_data[5] = frame->len;
+    crc_data[0] = frame->seq;
+    crc_data[1] = frame->flags;
+    crc_data[2] = frame->cmd;
+    crc_data[3] = frame->len;
 
     for(uint16_t i = 0u; i < frame->len; i++)
     {
-        crc_data[6u + i] = frame->data[i];
+        crc_data[4u + i] = frame->data[i];
     }
 
-    return UF4_CRC16(crc_data, (uint16_t)(6u + frame->len));
+    return UF4_CRC16(crc_data, (uint16_t)(4u + frame->len));
 }
 
 void UF4_ParserInit(uf4_parser_t *parser)
@@ -40,8 +36,6 @@ void UF4_ParserInit(uf4_parser_t *parser)
     parser->state = WAIT_SOF1;
     parser->data_index = 0u;
     parser->crc_rx = 0u;
-    parser->frame.src = 0u;
-    parser->frame.dst = 0u;
     parser->frame.seq = 0u;
     parser->frame.flags = 0u;
     parser->frame.cmd = 0u;
@@ -63,19 +57,9 @@ uint8_t UF4_ParserInput(uf4_parser_t *parser, uint8_t byte, uf4_frame_t *out_fra
             break;
 
         case WAIT_SOF2:
-            // 第二个帧头字节不对就回到 SOF1。这样 parser 简单且有界，
-            // 不需要额外历史缓冲。
-            parser->state = (byte == UF4_SOF2) ? WAIT_SRC : WAIT_SOF1;
-            break;
-
-        case WAIT_SRC:
-            parser->frame.src = byte;
-            parser->state = WAIT_DST;
-            break;
-
-        case WAIT_DST:
-            parser->frame.dst = byte;
-            parser->state = WAIT_SEQ;
+            // AA AA 55 中的第二个 AA 也可以是下一帧帧头。
+            parser->state = (byte == UF4_SOF2) ? WAIT_SEQ :
+                            ((byte == UF4_SOF1) ? WAIT_SOF2 : WAIT_SOF1);
             break;
 
         case WAIT_SEQ:

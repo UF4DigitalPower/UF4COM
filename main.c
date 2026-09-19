@@ -7,6 +7,7 @@
 #endif
 
 #include "uf4com.h"
+#include "uf4com_crc.h"
 #include "uf4com_id_table.h"
 
 static uint16_t g_input_voltage = 13088u;
@@ -48,6 +49,7 @@ static uint16_t g_tx_count;
 static uint16_t g_rx_count;
 static uint8_t g_rx_cmd;
 static uf4_ack_status_t g_ack_status = UF4_ACK_PENDING;
+static uint16_t g_save_count;
 
 #ifdef _WIN32
 static HANDLE g_serial = INVALID_HANDLE_VALUE;
@@ -111,13 +113,11 @@ static void CaptureTx(const uint8_t *data, uint16_t len, void *user)
     }
 }
 
-static void CaptureAck(uint8_t dst,
-                       uint8_t seq,
+static void CaptureAck(uint8_t seq,
                        uint8_t cmd,
                        uf4_ack_status_t status,
                        void *user)
 {
-    (void)dst;
     (void)seq;
     (void)cmd;
     (void)user;
@@ -134,6 +134,12 @@ static void CaptureRx(const uf4_frame_t *frame, void *user)
         g_rx_count++;
         g_rx_cmd = frame->cmd;
     }
+}
+
+static void CaptureSave(void *user)
+{
+    (void)user;
+    g_save_count++;
 }
 
 static int Expect(int condition, const char *message)
@@ -191,99 +197,129 @@ static int RunSelfTest(void)
     UF4_IDTableBind(g_id_table, sizeof(g_id_table) / sizeof(g_id_table[0]));
 
     ResetCapture();
-    const uf4_config_t slave_config = {
-        .local_id = 0x11u,
-        .role = UF4_ROLE_SLAVE,
+    const uf4_config_t config = {
         .ack_timeout_ms = 50u,
         .ack_retries = 2u,
-        .arbitration_slot_ms = 2u,
     };
-    UF4_InitEx(&slave_config, CaptureTx, NULL);
+    UF4_InitEx(&config, CaptureTx, NULL);
 
-    const uint16_t req_len = UF4_BuildFrameTo(0x00u,
-                                              0x11u,
-                                              0x01u,
-                                              UF4_FLAG_ACK_REQ,
-                                              UF4_CMD_READ_REQ,
-                                              read_data,
-                                              sizeof(read_data),
-                                              frame,
-                                              sizeof(frame));
+    const uint16_t req_len = UF4_BuildFrame(0x01u, UF4_FLAG_ACK_REQ,
+                                            UF4_CMD_READ_REQ, read_data,
+                                            sizeof(read_data), frame, sizeof(frame));
 
-    failures += Expect(req_len == 19u, "V4 read request length should include src/dst");
-    failures += Expect(UF4_InputBuffer(frame, req_len) == 1u, "slave should accept addressed request");
-    failures += Expect(g_tx_len == 19u, "read response length should be 19 bytes");
-    failures += Expect(g_tx_buffer[2] == 0x11u, "response src should be slave id");
-    failures += Expect(g_tx_buffer[3] == 0x00u, "response dst should be master id");
-    failures += Expect(g_tx_buffer[4] == 0x01u, "response seq should echo request seq");
-    failures += Expect(g_tx_buffer[5] == UF4_FLAG_ACK_FRAME, "response should be ACK frame");
-    failures += Expect(g_tx_buffer[6] == UF4_CMD_READ_RSP, "response command should be READ_RSP");
-    failures += Expect(g_tx_buffer[8] == 0x0Au && g_tx_buffer[9] == 0x33u && g_tx_buffer[10] == 0x20u,
+    failures += Expect(req_len == 17u, "V5 request should omit device addresses");
+    failures += Expect(UF4_InputBuffer(frame, req_len) == 1u, "read request should be accepted");
+    failures += Expect(g_tx_len == 17u, "read response length should be 17 bytes");
+    failures += Expect(g_tx_buffer[2] == 0x01u, "response seq should echo request seq");
+    failures += Expect(g_tx_buffer[3] == UF4_FLAG_ACK_FRAME, "response should be ACK frame");
+    failures += Expect(g_tx_buffer[4] == UF4_CMD_READ_RSP, "response command should be READ_RSP");
+    failures += Expect(g_tx_buffer[6] == 0x0Au && g_tx_buffer[7] == 0x33u && g_tx_buffer[8] == 0x20u,
                        "input voltage should encode as 0x3320");
 
     ResetCapture();
-    (void)UF4_BuildFrameTo(0x00u,
-                           0x12u,
-                           0x02u,
-                           UF4_FLAG_ACK_REQ,
-                           UF4_CMD_READ_REQ,
-                           read_data,
-                           sizeof(read_data),
-                           frame,
-                           sizeof(frame));
-    failures += Expect(UF4_InputBuffer(frame, req_len) == 0u, "slave should drop other device frames");
-    failures += Expect(g_tx_count == 0u, "wrong-dst frame should not respond");
+    uint8_t old_frame[UF4_MAX_FRAME_LEN];
+    old_frame[0] = UF4_SOF1;
+    old_frame[1] = UF4_SOF2;
+    old_frame[2] = 0x00u;
+    old_frame[3] = 0x11u;
+    memcpy(&old_frame[4], &frame[2], (size_t)(req_len - UF4_CRC_LEN - 2u));
+    const uint16_t old_crc = UF4_CRC16(&old_frame[2], (uint16_t)(req_len - UF4_CRC_LEN));
+    old_frame[req_len] = (uint8_t)old_crc;
+    old_frame[req_len + 1u] = (uint8_t)(old_crc >> 8);
+    failures += Expect(UF4_InputBuffer(old_frame, (uint16_t)(req_len + 2u)) == 0u,
+                       "V4 addressed frame must not be accepted");
+    failures += Expect(g_tx_count == 0u, "V4 frame must not trigger a response");
 
-    ResetCapture();
-    const uf4_config_t master_config = {
-        .local_id = 0x00u,
-        .role = UF4_ROLE_MASTER,
-        .ack_timeout_ms = 50u,
-        .ack_retries = 2u,
-        .arbitration_slot_ms = 2u,
-    };
-    UF4_InitEx(&master_config, CaptureTx, NULL);
+    UF4_InitEx(&config, CaptureTx, NULL);
     UF4_SetAckEventCallback(CaptureAck, NULL);
     UF4_SetFrameRxCallback(CaptureRx, NULL);
 
-    failures += Expect(UF4_SendFrameTo(0x11u,
-                                       0x33u,
-                                       UF4_FLAG_ACK_REQ,
-                                       UF4_CMD_READ_REQ,
-                                       read_data,
-                                       sizeof(read_data)) == 1u,
-                       "master should send tracked ACK request");
+    failures += Expect(UF4_SendFrame(0x33u, UF4_FLAG_ACK_REQ,
+                                     UF4_CMD_READ_REQ, read_data,
+                                     sizeof(read_data)) == 1u,
+                       "request should enter ACK table");
     failures += Expect(g_tx_count == 1u, "initial request should transmit once");
+    failures += Expect(UF4_SendFrame(0x33u, UF4_FLAG_ACK_REQ,
+                                     UF4_CMD_READ_REQ, read_data,
+                                     sizeof(read_data)) == 0u,
+                       "duplicate SEQ and command should be rejected");
+    failures += Expect(g_tx_count == 1u, "rejected duplicate should not transmit");
+    g_ack_status = UF4_ACK_PENDING;
 
     UF4_ProcessMs(50u);
     failures += Expect(g_tx_count == 2u, "timeout should retransmit request");
 
-    const uint16_t ack_len = UF4_BuildFrameTo(0x11u,
-                                              0x00u,
-                                              0x33u,
-                                              UF4_FLAG_ACK_FRAME,
-                                              UF4_CMD_READ_RSP,
-                                              read_data,
-                                              sizeof(read_data),
-                                              frame,
-                                              sizeof(frame));
-    failures += Expect(UF4_InputBuffer(frame, ack_len) == 1u, "master should accept matching ACK response");
+    const uint16_t ack_len = UF4_BuildFrame(0x33u, UF4_FLAG_ACK_FRAME,
+                                            UF4_CMD_READ_RSP, read_data,
+                                            sizeof(read_data), frame, sizeof(frame));
+    failures += Expect(UF4_InputBuffer(frame, ack_len) == 1u, "matching ACK should be accepted");
     failures += Expect(g_ack_status == UF4_ACK_DONE, "ACK table should mark request done");
     failures += Expect(g_rx_count == 1u && g_rx_cmd == UF4_CMD_READ_RSP,
                        "matched ACK response should be delivered to app callback");
 
     UF4_ProcessMs(100u);
     failures += Expect(g_tx_count == 2u, "matched request should not retransmit again");
-    failures += Expect(UF4_GetArbitrationDelayMs(0x03u) < UF4_GetArbitrationDelayMs(0x04u),
-                       "lower device id should have earlier arbitration slot");
+    UF4_InitEx(&config, CaptureTx, NULL);
+    UF4_SetSaveRequestCallback(CaptureSave, NULL);
+    ResetCapture();
+    const uint8_t write_data[] = {UF4_ID_SET_VOLTAGE_LIMIT, 0x12u, 0x34u};
+    uint16_t len = UF4_BuildFrame(0x40u, UF4_FLAG_ACK_REQ, UF4_CMD_WRITE_REQ,
+                                  write_data, sizeof(write_data), frame, sizeof(frame));
+    failures += Expect(UF4_InputBuffer(frame, len) == 1u && g_set_voltage == 0x1234u,
+                       "RW ID should accept WRITE");
+    failures += Expect(g_tx_buffer[4] == UF4_CMD_WRITE_RSP,
+                       "WRITE should acknowledge a registered ID");
+
+    const uint8_t ro_write[] = {UF4_ID_SET_VOLTAGE_LIMIT, 0x56u, 0x78u,
+                                UF4_ID_INPUT_VOLTAGE, 0x00u, 0x01u};
+    len = UF4_BuildFrame(0x41u, UF4_FLAG_ACK_REQ, UF4_CMD_WRITE_REQ,
+                         ro_write, sizeof(ro_write), frame, sizeof(frame));
+    (void)UF4_InputBuffer(frame, len);
+    failures += Expect(g_set_voltage == 0x1234u && g_input_voltage == 13088u,
+                       "RO ID should reject the entire WRITE before applying it");
+    failures += Expect(g_tx_buffer[6] == 0xFFu && g_tx_buffer[8] == UF4_ERR_WRITE_PROTECT,
+                       "RO ID should return WRITE_PROTECT");
+
+    const uint8_t bad_write[] = {UF4_ID_SET_VOLTAGE_LIMIT, 0x56u, 0x78u,
+                                 0xFEu, 0x00u, 0x01u};
+    len = UF4_BuildFrame(0x43u, UF4_FLAG_ACK_REQ, UF4_CMD_WRITE_REQ,
+                         bad_write, sizeof(bad_write), frame, sizeof(frame));
+    (void)UF4_InputBuffer(frame, len);
+    failures += Expect(g_set_voltage == 0x1234u,
+                       "invalid ID should reject the entire WRITE before applying it");
+    failures += Expect((g_tx_buffer[3] & UF4_FLAG_ERROR) != 0u,
+                       "invalid ID should return an error response");
+
+    ResetCapture();
+    g_save_count = 0u;
+    len = UF4_BuildFrame(0x42u, UF4_FLAG_ACK_REQ, UF4_CMD_SAVE_REQ,
+                         NULL, 0u, frame, sizeof(frame));
+    failures += Expect(UF4_InputBuffer(frame, len) == 1u && g_save_count == 1u,
+                       "SAVE should call the storage adapter once");
+    failures += Expect(g_tx_count == 0u, "SAVE should wait for storage completion");
+    (void)UF4_InputBuffer(frame, len);
+    failures += Expect(g_save_count == 1u, "SAVE retry should not restart storage");
+    UF4_CompleteSave(UF4_OK);
+    failures += Expect(g_tx_count == 1u && g_tx_buffer[4] == UF4_CMD_SAVE_RSP,
+                       "SAVE completion should send matching response");
+
+    UF4_ResetParser();
+    failures += Expect(UF4_IsInputIdle() != 0u, "reset parser should be idle");
+    (void)UF4_InputByte(UF4_SOF1);
+    failures += Expect(UF4_IsInputIdle() == 0u, "partial frame should not be idle");
+    (void)UF4_InputByte(UF4_SOF1);
+    failures += Expect(UF4_InputBuffer(&frame[1], (uint16_t)(len - 1u)) == 1u,
+                       "repeated SOF should resynchronize to the next frame");
+    UF4_ResetParser();
+    failures += Expect(UF4_IsInputIdle() != 0u, "parser reset should discard partial input");
 
     if(failures == 0)
     {
-        printf("UF4COM V4 self-test passed.\n");
+        printf("UF4COM V5 self-test passed.\n");
         return 0;
     }
 
-    printf("UF4COM V4 self-test failed: %d\n", failures);
+    printf("UF4COM V5 self-test failed: %d\n", failures);
     return 1;
 }
 
@@ -389,7 +425,7 @@ static void OnWriteApplied(void *user)
            g_duty_cmd);
 }
 
-static int RunSerialSlave(const char *port_name, uint32_t baudrate, uint8_t local_id)
+static int RunSerialSlave(const char *port_name, uint32_t baudrate)
 {
     uint8_t rx[256];
     DWORD read_len;
@@ -402,20 +438,16 @@ static int RunSerialSlave(const char *port_name, uint32_t baudrate, uint8_t loca
     UF4_IDTableBind(g_id_table, sizeof(g_id_table) / sizeof(g_id_table[0]));
 
     const uf4_config_t config = {
-        .local_id = local_id,
-        .role = UF4_ROLE_SLAVE,
         .ack_timeout_ms = UF4_DEFAULT_ACK_TIMEOUT_MS,
         .ack_retries = UF4_DEFAULT_ACK_RETRIES,
-        .arbitration_slot_ms = UF4_DEFAULT_ARBITRATION_SLOT_MS,
     };
     UF4_InitEx(&config, SerialTx, NULL);
     UF4_SetWriteApplyCallback(OnWriteApplied, NULL);
 
-    printf("UF4COM C slave ready: port=%s baud=%lu id=0x%02X\n",
+    printf("UF4COM V5 endpoint ready: port=%s baud=%lu\n",
            port_name,
-           (unsigned long)baudrate,
-           local_id);
-    printf("Open Python GUI on the paired port, default master COM8 -> slave COM9.\n");
+           (unsigned long)baudrate);
+    printf("Peer must use the address-free V5 frame format.\n");
 
     for(;;)
     {
@@ -442,11 +474,10 @@ static int RunSerialSlave(const char *port_name, uint32_t baudrate, uint8_t loca
     return 1;
 }
 #else
-static int RunSerialSlave(const char *port_name, uint32_t baudrate, uint8_t local_id)
+static int RunSerialSlave(const char *port_name, uint32_t baudrate)
 {
     (void)port_name;
     (void)baudrate;
-    (void)local_id;
     fprintf(stderr, "serial slave demo currently uses Win32 serial APIs.\n");
     return 1;
 }
@@ -456,7 +487,6 @@ int main(int argc, char **argv)
 {
     const char *port_name;
     uint32_t baudrate = 115200u;
-    uint8_t local_id = 0x11u;
 
     if(argc <= 1 || strcmp(argv[1], "--self-test") == 0)
     {
@@ -467,7 +497,7 @@ int main(int argc, char **argv)
     {
         printf("Usage:\n");
         printf("  UF4COM_C_SLAVE_PC.exe --self-test\n");
-        printf("  UF4COM_C_SLAVE_PC.exe COM9 [baudrate] [local_id]\n");
+        printf("  UF4COM_C_SLAVE_PC.exe COM9 [baudrate]\n");
         return 0;
     }
 
@@ -476,10 +506,11 @@ int main(int argc, char **argv)
     {
         baudrate = (uint32_t)strtoul(argv[2], NULL, 0);
     }
-    if(argc >= 4)
+    if(argc > 3)
     {
-        local_id = (uint8_t)strtoul(argv[3], NULL, 0);
+        fprintf(stderr, "unexpected argument: V5 has no device address\n");
+        return 1;
     }
 
-    return RunSerialSlave(port_name, baudrate, local_id);
+    return RunSerialSlave(port_name, baudrate);
 }

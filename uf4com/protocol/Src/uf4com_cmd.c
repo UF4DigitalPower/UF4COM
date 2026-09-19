@@ -15,12 +15,17 @@
 uint8_t g_stream_enable;
 uint8_t g_stream_ids[UF4_MAX_STREAM_IDS];
 uint8_t g_stream_count;
-static uint8_t s_stream_dst = UF4_DEFAULT_MASTER_ID;
+static uf4_save_request_fn_t s_save_request;
+static void *s_save_user;
+static uint8_t s_save_pending;
+static uint8_t s_save_reply;
+static uint8_t s_save_seq;
 
 static void UF4_HandleRead(uf4_frame_t *frame);
 static void UF4_HandleWrite(uf4_frame_t *frame);
 static void UF4_HandleStreamStart(uf4_frame_t *frame);
 static void UF4_HandleStreamStop(uf4_frame_t *frame);
+static void UF4_HandleSave(uf4_frame_t *frame);
 static void UF4_SendError(const uf4_frame_t *frame, uint8_t rsp_cmd, uf4_error_t error);
 static uint8_t UF4_ShouldReply(const uf4_frame_t *frame);
 
@@ -49,6 +54,10 @@ void UF4_Dispatch(uf4_frame_t *frame)
             UF4_HandleStreamStop(frame);
             break;
 
+        case UF4_CMD_SAVE_REQ:
+            UF4_HandleSave(frame);
+            break;
+
         default:
             UF4_SendError(frame, frame->cmd, UF4_ERR_INVALID_CMD);
             break;
@@ -66,13 +75,6 @@ static uint8_t UF4_ShouldReply(const uf4_frame_t *frame)
     {
         // ACK_REQ 是请求响应契约：不带它时，WRITE 可以是只发不等；
         // READ 则等价于静默请求。上位机正常读写时应该置位 ACK_REQ。
-        return 0u;
-    }
-
-    if(frame->dst == UF4_BROADCAST_ID || frame->src == UF4_BROADCAST_ID)
-    {
-        // 广播绝不 ACK。一个命令可能命中多个从站，同时 ACK 正是半双工总线
-        // 最容易撞包的地方。
         return 0u;
     }
 
@@ -111,8 +113,7 @@ static void UF4_HandleRead(uf4_frame_t *frame)
 
     if(UF4_ShouldReply(frame) != 0u)
     {
-        (void)UF4_SendFrameTo(frame->src,
-                              frame->seq,
+        (void)UF4_SendFrame(frame->seq,
                               UF4_FLAG_ACK_FRAME,
                               UF4_CMD_READ_RSP,
                               rsp,
@@ -131,32 +132,35 @@ static void UF4_HandleWrite(uf4_frame_t *frame)
     for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
     {
         const uint8_t id = frame->data[i];
-        const uint16_t value = ((uint16_t)frame->data[i + 1u] << 8) | frame->data[i + 2u];
         uf4_id_t *item = UF4_FindID(id);
-
         if(item == NULL)
         {
             UF4_SendError(frame, UF4_CMD_WRITE_RSP, UF4_ERR_INVALID_ID);
             return;
         }
-
-        if(item->rw == UF4_ID_PERMISSION_RO)
+        if(item->rw != UF4_ID_PERMISSION_RW)
         {
-        // 遇到第一个写保护项就停止整个 WRITE。注意：此前已经写入的项
-        // 不会回滚；如果业务要求原子性，就把载荷控制小一点。
             UF4_SendError(frame, UF4_CMD_WRITE_RSP, UF4_ERR_WRITE_PROTECT);
             return;
         }
+    }
 
+    for(uint8_t i = 0u; i < frame->len; i += UF4_TV_SIZE)
+    {
+        const uint8_t id = frame->data[i];
+        const uint16_t value = ((uint16_t)frame->data[i + 1u] << 8) | frame->data[i + 2u];
+        uf4_id_t *item = UF4_FindID(id);
         *(item->ptr) = value;
     }
 
-    UF4_NotifyWriteApplied();
+    if(frame->len != 0u)
+    {
+        UF4_NotifyWriteApplied();
+    }
 
     if(UF4_ShouldReply(frame) != 0u)
     {
-        (void)UF4_SendFrameTo(frame->src,
-                              frame->seq,
+        (void)UF4_SendFrame(frame->seq,
                               UF4_FLAG_ACK_FRAME,
                               UF4_CMD_WRITE_RSP,
                               frame->data,
@@ -176,7 +180,6 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
 
     g_stream_enable = 1u;
     g_stream_count = 0u;
-    s_stream_dst = frame->src;
 
     if(frame->len == 0u)
     {
@@ -203,8 +206,7 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
 
     if(UF4_ShouldReply(frame) != 0u)
     {
-        (void)UF4_SendFrameTo(frame->src,
-                              frame->seq,
+        (void)UF4_SendFrame(frame->seq,
                               UF4_FLAG_ACK_FRAME,
                               UF4_CMD_STREAM_START_RSP,
                               NULL,
@@ -214,18 +216,91 @@ static void UF4_HandleStreamStart(uf4_frame_t *frame)
 
 static void UF4_HandleStreamStop(uf4_frame_t *frame)
 {
-    g_stream_enable = 0u;
-    g_stream_count = 0u;
+    UF4_StreamStop();
 
     if(UF4_ShouldReply(frame) != 0u)
     {
-        (void)UF4_SendFrameTo(frame->src,
-                              frame->seq,
+        (void)UF4_SendFrame(frame->seq,
                               UF4_FLAG_ACK_FRAME,
                               UF4_CMD_STREAM_STOP_RSP,
                               NULL,
                               0u);
     }
+}
+
+void UF4_StreamStop(void)
+{
+    g_stream_enable = 0u;
+    g_stream_count = 0u;
+}
+
+void UF4_ResetCommandState(void)
+{
+    UF4_StreamStop();
+    s_save_pending = 0u;
+    s_save_reply = 0u;
+}
+
+void UF4_SetSaveRequestCallback(uf4_save_request_fn_t cb, void *user)
+{
+    s_save_request = cb;
+    s_save_user = user;
+}
+
+static void UF4_HandleSave(uf4_frame_t *frame)
+{
+    if(frame->len != 0u)
+    {
+        UF4_SendError(frame, UF4_CMD_SAVE_RSP, UF4_ERR_INVALID_LEN);
+        return;
+    }
+
+    if(s_save_pending != 0u)
+    {
+        if(frame->seq != s_save_seq)
+        {
+            UF4_SendError(frame, UF4_CMD_SAVE_RSP, UF4_ERR_DEVICE_BUSY);
+        }
+        return;
+    }
+
+    if(s_save_request == NULL)
+    {
+        UF4_SendError(frame, UF4_CMD_SAVE_RSP, UF4_ERR_INTERNAL);
+        return;
+    }
+
+    s_save_pending = 1u;
+    s_save_reply = UF4_ShouldReply(frame);
+    s_save_seq = frame->seq;
+    s_save_request(s_save_user);
+}
+
+void UF4_CompleteSave(uf4_error_t result)
+{
+    if(s_save_pending == 0u)
+    {
+        return;
+    }
+
+    if(s_save_reply != 0u)
+    {
+        if(result == UF4_OK)
+        {
+            (void)UF4_SendFrame(s_save_seq, UF4_FLAG_ACK_FRAME,
+                                UF4_CMD_SAVE_RSP, NULL, 0u);
+        }
+        else
+        {
+            const uint8_t data[UF4_TV_SIZE] = {
+                0xFFu, (uint8_t)((uint16_t)result >> 8), (uint8_t)result
+            };
+            (void)UF4_SendFrame(s_save_seq, UF4_FLAG_ACK_FRAME | UF4_FLAG_ERROR,
+                                UF4_CMD_SAVE_RSP, data, sizeof(data));
+        }
+    }
+    s_save_pending = 0u;
+    s_save_reply = 0u;
 }
 
 void UF4_StreamTask(void)
@@ -256,8 +331,7 @@ void UF4_StreamTask(void)
         data[len++] = (uint8_t)(value & 0xFFu);
     }
 
-    (void)UF4_SendFrameTo(s_stream_dst,
-                          0u,
+    (void)UF4_SendFrame(0u,
                           0u,
                           UF4_CMD_STREAM_DATA,
                           data,
@@ -279,8 +353,7 @@ static void UF4_SendError(const uf4_frame_t *frame, uint8_t rsp_cmd, uf4_error_t
     data[1] = (uint8_t)((uint16_t)error >> 8);
     data[2] = (uint8_t)((uint16_t)error & 0xFFu);
 
-    (void)UF4_SendFrameTo(frame->src,
-                          frame->seq,
+    (void)UF4_SendFrame(frame->seq,
                           UF4_FLAG_ACK_FRAME | UF4_FLAG_ERROR,
                           rsp_cmd,
                           data,
